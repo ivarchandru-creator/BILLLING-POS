@@ -1,0 +1,8 @@
+{
+  "name": "Sri Senthur Velan Electricals and Pipes - Billing & Inventory",
+  "description": "Sri Senthur Velan Electricals and Pipes billing, POS, and inventory management system with GST invoicing, stock tracking, and supplier management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
