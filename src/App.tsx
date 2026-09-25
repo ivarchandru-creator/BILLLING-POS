@@ -52,6 +52,8 @@ export default function App() {
 
   // Navigation - default to Dashboard matching store overview
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [stockStatusFilter, setStockStatusFilter] = useState<'all' | 'low'>('all');
+  const [customerCreditFilter, setCustomerCreditFilter] = useState<boolean>(false);
 
   // Application Data States
   const [products, setProducts] = useState<Product[]>([]);
@@ -82,35 +84,21 @@ export default function App() {
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
-      if (e.key === 'F1') {
-        e.preventDefault();
-        setActiveTab('dashboard');
-      } else if (e.key === 'F2') {
+      // While on Billing screen, function keys and shortcuts are reserved for POS speed billing
+      // (F1: Guide, F2: Search, F3: Cart Qty, F4: Customer Details, F6: Hold, F7: Cash, F8: UPI, F9: Card, F10: Credit, Ctrl+Enter: Print)
+      if (activeTab === 'billing') {
+        return;
+      }
+
+      // Quick jump to Billing / New Invoice screen from any other tab
+      if (e.key === 'F2') {
         e.preventDefault();
         setActiveTab('billing');
-      } else if (e.key === 'F3') {
-        e.preventDefault();
-        setActiveTab('inventory');
-      } else if (e.key === 'F4') {
-        e.preventDefault();
-        setActiveTab('customers');
-      } else if (e.key === 'F5' && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        setActiveTab('suppliers');
-      } else if (e.key === 'F6') {
-        e.preventDefault();
-        setActiveTab('invoices');
-      } else if (e.key === 'F7') {
-        e.preventDefault();
-        setActiveTab('reports');
-      } else if (e.key === 'F8') {
-        e.preventDefault();
-        setActiveTab('settings');
       }
     };
     window.addEventListener('keydown', handleGlobalKey);
     return () => window.removeEventListener('keydown', handleGlobalKey);
-  }, []);
+  }, [activeTab]);
 
   // Low stock counter
   const lowStockCount = products.filter((p) => p.stockQty <= p.minimumStock).length;
@@ -319,6 +307,13 @@ export default function App() {
       setCategories(updatedCats);
       saveCategories(updatedCats);
     }
+  };
+
+  // Delete product
+  const handleDeleteProduct = (productId: string) => {
+    const updated = products.filter((p) => p.productId !== productId);
+    setProducts(updated);
+    saveProducts(updated);
   };
 
   // Custom Category management
@@ -576,6 +571,13 @@ export default function App() {
     saveCustomers(updated);
   };
 
+  // Delete customer
+  const handleDeleteCustomer = (customerId: string) => {
+    const updated = customers.filter((c) => c.customerId !== customerId);
+    setCustomers(updated);
+    saveCustomers(updated);
+  };
+
   // Save settings
   const handleSaveSettings = (newSettings: ShopSettings) => {
     setSettings(newSettings);
@@ -683,7 +685,19 @@ export default function App() {
               settings={settings}
               setActiveTab={setActiveTab}
               onPrintInvoice={(inv) => setPrintModalInvoice(inv)}
-              onOpenStockModal={() => setActiveTab('inventory')}
+              onOpenStockModal={() => {
+                setStockStatusFilter('all');
+                setActiveTab('inventory');
+              }}
+              onNavigateToReports={() => setActiveTab('reports')}
+              onNavigateToInventory={(filter = 'all') => {
+                setStockStatusFilter(filter);
+                setActiveTab('inventory');
+              }}
+              onNavigateToCustomers={(creditOnly = false) => {
+                setCustomerCreditFilter(creditOnly);
+                setActiveTab('customers');
+              }}
               onMarkCreditPaid={handleMarkCreditPaid}
             />
           )}
@@ -709,7 +723,9 @@ export default function App() {
               stockTransactions={stockTransactions}
               settings={settings}
               categories={categories}
+              initialStockFilter={stockStatusFilter}
               onSaveProduct={handleSaveProduct}
+              onDeleteProduct={handleDeleteProduct}
               onUpdateStock={handleUpdateStock}
               onBulkImportProducts={handleBulkImportProducts}
               onAddCategory={handleAddCategory}
@@ -723,7 +739,9 @@ export default function App() {
               customers={customers}
               invoices={invoices}
               settings={settings}
+              initialCreditFilter={customerCreditFilter}
               onSaveCustomer={handleSaveCustomer}
+              onDeleteCustomer={handleDeleteCustomer}
             />
           )}
 
@@ -744,13 +762,14 @@ export default function App() {
             <InvoicesHistory
               invoices={invoices}
               settings={settings}
+              products={products}
               onPrintInvoice={(inv) => setPrintModalInvoice(inv)}
               onMarkCreditPaid={handleMarkCreditPaid}
             />
           )}
 
           {activeTab === 'reports' && (
-            <ReportsView invoices={invoices} settings={settings} />
+            <ReportsView invoices={invoices} settings={settings} products={products} />
           )}
 
           {activeTab === 'settings' && (

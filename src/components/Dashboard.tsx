@@ -27,6 +27,9 @@ interface DashboardProps {
   onPrintInvoice: (invoice: Invoice) => void;
   onOpenStockModal?: () => void;
   onMarkCreditPaid?: (invoiceId: string) => void;
+  onNavigateToReports?: () => void;
+  onNavigateToInventory?: (filter?: 'all' | 'low') => void;
+  onNavigateToCustomers?: (creditPendingOnly?: boolean) => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -38,6 +41,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onPrintInvoice,
   onOpenStockModal,
   onMarkCreditPaid,
+  onNavigateToReports,
+  onNavigateToInventory,
+  onNavigateToCustomers,
 }) => {
   // Today's date prefix (YYYY-MM-DD)
   const todayStr = new Date().toISOString().split('T')[0];
@@ -128,13 +134,32 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* 4 Metric Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Today's Sales */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow">
+        {/* Card 1: Today's Sales -> Navigates to Reports */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => {
+            if (onNavigateToReports) {
+              onNavigateToReports();
+            } else {
+              setActiveTab('reports');
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              if (onNavigateToReports) onNavigateToReports();
+              else setActiveTab('reports');
+            }
+          }}
+          className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col justify-between hover:shadow-md hover:border-emerald-400/80 transition-all cursor-pointer group active:scale-[0.99]"
+          title="Click to view Sales Reports"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Today's Sales
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider group-hover:text-emerald-700 transition-colors flex items-center gap-1.5">
+              <span>Today's Sales</span>
+              <ArrowRight className="w-3.5 h-3.5 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all text-emerald-600" />
             </span>
-            <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-base shadow-2xs">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-base shadow-2xs group-hover:scale-105 transition-transform">
               ₹
             </div>
           </div>
@@ -142,19 +167,39 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <h3 className="text-2xl font-bold font-mono text-slate-900 tracking-tight">
               {formatINR(todaySalesTotal)}
             </h3>
-            <p className="text-[11px] text-slate-400 mt-1">
-              {todayInvoices.length} invoices generated today
+            <p className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
+              <span>{todayInvoices.length} invoices generated today</span>
+              <span className="text-[10.5px] font-semibold text-emerald-600 group-hover:underline">Reports &rarr;</span>
             </p>
           </div>
         </div>
 
-        {/* Card 2: Total Inventory */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow">
+        {/* Card 2: Total Inventory -> Navigates to Products Section */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => {
+            if (onNavigateToInventory) {
+              onNavigateToInventory('all');
+            } else {
+              setActiveTab('inventory');
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              if (onNavigateToInventory) onNavigateToInventory('all');
+              else setActiveTab('inventory');
+            }
+          }}
+          className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col justify-between hover:shadow-md hover:border-blue-400/80 transition-all cursor-pointer group active:scale-[0.99]"
+          title="Click to view Products & Inventory"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Total Inventory
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider group-hover:text-blue-700 transition-colors flex items-center gap-1.5">
+              <span>Total Inventory</span>
+              <ArrowRight className="w-3.5 h-3.5 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all text-blue-600" />
             </span>
-            <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shadow-2xs">
+            <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform">
               <Package className="w-5 h-5" />
             </div>
           </div>
@@ -162,16 +207,39 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <h3 className="text-2xl font-bold font-mono text-slate-900 tracking-tight">
               {products.length} <span className="text-xs font-sans font-medium text-slate-400">items</span>
             </h3>
+            <p className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
+              <span>All catalog products</span>
+              <span className="text-[10.5px] font-semibold text-blue-600 group-hover:underline">Products &rarr;</span>
+            </p>
           </div>
         </div>
 
-        {/* Card 3: Low Stock Alerts */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow">
+        {/* Card 3: Low Stock Alerts -> Navigates to Products Section & Shows Low Stock */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => {
+            if (onNavigateToInventory) {
+              onNavigateToInventory('low');
+            } else {
+              setActiveTab('inventory');
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              if (onNavigateToInventory) onNavigateToInventory('low');
+              else setActiveTab('inventory');
+            }
+          }}
+          className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col justify-between hover:shadow-md hover:border-amber-400/80 transition-all cursor-pointer group active:scale-[0.99]"
+          title="Click to view Low Stock Products"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Low Stock Alerts
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider group-hover:text-amber-700 transition-colors flex items-center gap-1.5">
+              <span>Low Stock Alerts</span>
+              <ArrowRight className="w-3.5 h-3.5 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all text-amber-600" />
             </span>
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-2xs ${
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform ${
               lowStockItems.length > 0
                 ? 'bg-amber-50 text-amber-600'
                 : 'bg-slate-50 text-slate-400'
@@ -185,22 +253,45 @@ export const Dashboard: React.FC<DashboardProps> = ({
             }`}>
               {lowStockItems.length} <span className="text-xs font-sans font-medium text-slate-400">items</span>
             </h3>
+            <p className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
+              <span>{lowStockItems.length > 0 ? 'Requires reordering' : 'Stock levels healthy'}</span>
+              <span className="text-[10.5px] font-semibold text-amber-600 group-hover:underline">View Low Stock &rarr;</span>
+            </p>
           </div>
         </div>
 
-        {/* Card 4: Credit Balance Due (Udhar) */}
-        <div className={`rounded-2xl border p-5 shadow-xs flex flex-col justify-between transition-shadow hover:shadow-md ${
-          overdueCount > 0
-            ? 'bg-rose-50/40 border-rose-200'
-            : pendingCreditInvoices.length > 0
-            ? 'bg-amber-50/40 border-amber-200'
-            : 'bg-white border-slate-200/80'
-        }`}>
+        {/* Card 4: Credit Balance Due -> Navigates to Customers Section & Shows Credit Pending */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => {
+            if (onNavigateToCustomers) {
+              onNavigateToCustomers(true);
+            } else {
+              setActiveTab('customers');
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              if (onNavigateToCustomers) onNavigateToCustomers(true);
+              else setActiveTab('customers');
+            }
+          }}
+          className={`rounded-2xl border p-5 shadow-xs flex flex-col justify-between transition-all hover:shadow-md cursor-pointer group active:scale-[0.99] ${
+            overdueCount > 0
+              ? 'bg-rose-50/40 border-rose-200 hover:border-rose-400'
+              : pendingCreditInvoices.length > 0
+              ? 'bg-amber-50/40 border-amber-200 hover:border-amber-400'
+              : 'bg-white border-slate-200/80 hover:border-purple-300'
+          }`}
+          title="Click to view Customers with Credit Pending"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-600 uppercase tracking-wider">
-              Credit Due (Udhar)
+            <span className="text-xs font-semibold text-slate-600 uppercase tracking-wider group-hover:text-amber-900 transition-colors flex items-center gap-1.5">
+              <span>Credit Due</span>
+              <ArrowRight className="w-3.5 h-3.5 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all text-amber-700" />
             </span>
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-2xs ${
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-2xs group-hover:scale-105 transition-transform ${
               overdueCount > 0
                 ? 'bg-rose-100 text-rose-600'
                 : pendingCreditInvoices.length > 0
@@ -216,22 +307,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
             }`}>
               {formatINR(totalCreditDueAmount)}
             </h3>
-            <div className="flex items-center gap-1.5 mt-1">
-              {overdueCount > 0 ? (
-                <span className="text-[11px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
-                  {overdueCount} Overdue
-                </span>
-              ) : dueTodayCount > 0 ? (
-                <span className="text-[11px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
-                  {dueTodayCount} Due Today
-                </span>
-              ) : pendingCreditInvoices.length > 0 ? (
-                <span className="text-[11px] text-slate-500 font-medium">
-                  {pendingCreditInvoices.length} pending bills
-                </span>
-              ) : (
-                <span className="text-[11px] text-emerald-600 font-medium">All settled</span>
-              )}
+            <div className="flex items-center justify-between gap-1.5 mt-1">
+              <div>
+                {overdueCount > 0 ? (
+                  <span className="text-[11px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
+                    {overdueCount} Overdue
+                  </span>
+                ) : dueTodayCount > 0 ? (
+                  <span className="text-[11px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
+                    {dueTodayCount} Due Today
+                  </span>
+                ) : pendingCreditInvoices.length > 0 ? (
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    {pendingCreditInvoices.length} pending bills
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-emerald-600 font-medium">All settled</span>
+                )}
+              </div>
+              <span className="text-[10.5px] font-semibold text-amber-800 group-hover:underline">
+                Credit Customers &rarr;
+              </span>
             </div>
           </div>
         </div>
@@ -513,7 +609,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setActiveTab('inventory')}
+                onClick={() => {
+                  if (onNavigateToInventory) onNavigateToInventory('low');
+                  else setActiveTab('inventory');
+                }}
                 className="text-xs font-semibold text-orange-600 hover:text-orange-700 transition-colors cursor-pointer"
               >
                 Manage
@@ -531,7 +630,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   return (
                     <div
                       key={item.productId}
-                      onClick={() => setActiveTab('inventory')}
+                      onClick={() => {
+                        if (onNavigateToInventory) onNavigateToInventory('low');
+                        else setActiveTab('inventory');
+                      }}
                       className="p-3 rounded-xl border border-amber-200/80 bg-amber-50/40 hover:bg-amber-50/80 transition-colors flex items-start justify-between text-xs gap-2 cursor-pointer"
                       title="Click to view in Inventory"
                     >

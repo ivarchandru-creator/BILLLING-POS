@@ -42,6 +42,17 @@
   input:focus, select:focus, textarea:focus {
     outline: none;
   }
+
+  /* Remove default arrow spinner buttons on number inputs */
+  input::-webkit-outer-spin-button,
+  input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type=number] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
 }
 
 @media print {
@@ -398,6 +409,56 @@
   .print-a4-page:last-of-type {
     page-break-after: auto !important;
     break-after: auto !important;
+  }
+
+  /* Explicit A5 Page container for compact printing (small quantity products) */
+  .print-a5-page {
+    width: 100% !important;
+    max-width: 148mm !important;
+    min-height: 180mm !important;
+    box-sizing: border-box !important;
+    margin: 0 auto !important;
+    padding: 3mm 5mm !important;
+    background-color: #ffffff !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .print-a5-page:last-child,
+  .print-a5-page:last-of-type {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  #a5-invoice {
+    font-size: 7.5pt !important;
+    line-height: 1.25 !important;
+  }
+
+  #a5-invoice table {
+    font-size: 7pt !important;
+    margin: 3pt 0 5pt 0 !important;
+  }
+
+  #a5-invoice th,
+  #a5-invoice td {
+    padding: 2.5pt 3.5pt !important;
+  }
+
+  #a5-invoice h1 {
+    font-size: 12pt !important;
+  }
+
+  #a5-invoice h2 {
+    font-size: 9.5pt !important;
   }
 
   .print-signatory-footer {

@@ -9,17 +9,27 @@ import {
   X,
   FileText,
   Tag,
+  DollarSign,
+  Percent,
 } from 'lucide-react';
-import { Invoice, ShopSettings } from '../types';
-import { formatINR, getInvoiceDiscount, getPaymentMethodBadge, formatShopAddress, getShopLogoUrl } from '../utils/formatters';
+import { Invoice, ShopSettings, Product, InvoiceItem } from '../types';
+import {
+  formatINR,
+  getInvoiceDiscount,
+  getPaymentMethodBadge,
+  formatShopAddress,
+  formatShopContactLine,
+  getShopLogoUrl,
+} from '../utils/formatters';
 import { downloadAnalyticsReportPdf } from '../utils/pdfGenerator';
 
 interface ReportsViewProps {
   invoices: Invoice[];
   settings: ShopSettings;
+  products?: Product[];
 }
 
-export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) => {
+export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings, products = [] }) => {
   const [reportPeriod, setReportPeriod] = useState<'daily' | 'monthly' | 'yearly'>('daily');
   const [selectedDate, setSelectedDate] = useState<string>(
     new Date().toISOString().split('T')[0]
@@ -31,6 +41,39 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
     String(new Date().getFullYear())
   );
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
+
+  // Fast Product Cost / Purchase Price Lookup Map
+  const productCostMap = useMemo(() => {
+    const map = new Map<string, number>();
+    (products || []).forEach((p) => {
+      const cost = Number(p.purchasePrice) || 0;
+      map.set(p.productId, cost);
+      if (p.name) {
+        map.set(p.name.toLowerCase().trim(), cost);
+      }
+    });
+    return map;
+  }, [products]);
+
+  // Helper to determine cost/purchase price per unit for an item
+  const getItemCostPrice = (item: InvoiceItem): number => {
+    if (typeof item.purchasePrice === 'number' && item.purchasePrice >= 0) {
+      return item.purchasePrice;
+    }
+    if (typeof item.costPrice === 'number' && item.costPrice >= 0) {
+      return item.costPrice;
+    }
+    if (item.productId && productCostMap.has(item.productId)) {
+      return productCostMap.get(item.productId) || 0;
+    }
+    if (item.productNameSnapshot) {
+      const key = item.productNameSnapshot.toLowerCase().trim();
+      if (productCostMap.has(key)) {
+        return productCostMap.get(key) || 0;
+      }
+    }
+    return 0;
+  };
 
   // Filter invoices based on period
   const filteredInvoices = useMemo(() => {
@@ -93,13 +136,49 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
   );
   const avgBillValue = totalBills > 0 ? totalRevenue / totalBills : 0;
 
-  // Chronological time-ordered breakdown data
+  // Cost of Goods Sold (COGS) & Profit Calculations based on Cost Price vs Selling Price
+  const totalCostOfGoods = useMemo(() => {
+    return filteredInvoices.reduce((sum, inv) => {
+      const invCogs = inv.items.reduce((iSum, it) => {
+        const unitCost = getItemCostPrice(it);
+        return iSum + unitCost * it.quantity;
+      }, 0);
+      return sum + invCogs;
+    }, 0);
+  }, [filteredInvoices, productCostMap]);
+
+  // Net pre-tax taxable sales (Gross Subtotal minus discounts given)
+  const netTaxableSales = useMemo(() => {
+    return Math.max(0, totalGross - totalDiscount);
+  }, [totalGross, totalDiscount]);
+
+  // Total Gross Profit = Net pre-tax sales - Total Cost of Goods Sold
+  const totalProfit = useMemo(() => {
+    return netTaxableSales - totalCostOfGoods;
+  }, [netTaxableSales, totalCostOfGoods]);
+
+  const profitMarginPercent = useMemo(() => {
+    if (netTaxableSales <= 0) return 0;
+    return Number(((totalProfit / netTaxableSales) * 100).toFixed(1));
+  }, [totalProfit, netTaxableSales]);
+
+  // Chronological time-ordered breakdown data with Profit
   const timeOrderBreakdown = useMemo(() => {
     if (reportPeriod === 'daily') {
       return [...filteredInvoices]
         .sort((a, b) => a.dateTime.localeCompare(b.dateTime))
         .map((inv) => {
           const timeStr = inv.dateTime.split(' ')[1] || '';
+          const gross = inv.subtotal || (inv.grandTotal - (inv.gstAmount || 0));
+          const discount = getInvoiceDiscount(inv);
+          const taxable = Math.max(0, gross - discount);
+          const cogs = inv.items.reduce(
+            (s, it) => s + getItemCostPrice(it) * it.quantity,
+            0
+          );
+          const profit = taxable - cogs;
+          const margin = taxable > 0 ? Number(((profit / taxable) * 100).toFixed(1)) : 0;
+
           return {
             id: inv.invoiceId || inv.id || inv.invoiceNumber,
             timeStr,
@@ -108,8 +187,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
             customerPhone: inv.customerPhone,
             paymentMethod: inv.paymentMethod,
             itemsCount: inv.items.reduce((s, it) => s + it.quantity, 0),
-            gross: inv.subtotal || (inv.grandTotal - (inv.gstAmount || 0)),
-            discount: getInvoiceDiscount(inv),
+            gross,
+            discount,
+            cogs,
+            profit,
+            margin,
             gst: inv.gstAmount || 0,
             net: inv.grandTotal,
           };
@@ -124,6 +206,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
           bills: number;
           gross: number;
           discount: number;
+          cogs: number;
+          profit: number;
           gst: number;
           net: number;
         }
@@ -132,11 +216,31 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
       filteredInvoices.forEach((inv) => {
         const day = inv.dateTime.split(' ')[0];
         if (!map[day]) {
-          map[day] = { date: day, bills: 0, gross: 0, discount: 0, gst: 0, net: 0 };
+          map[day] = {
+            date: day,
+            bills: 0,
+            gross: 0,
+            discount: 0,
+            cogs: 0,
+            profit: 0,
+            gst: 0,
+            net: 0,
+          };
         }
+        const gross = inv.subtotal || (inv.grandTotal - (inv.gstAmount || 0));
+        const discount = getInvoiceDiscount(inv);
+        const taxable = Math.max(0, gross - discount);
+        const cogs = inv.items.reduce(
+          (s, it) => s + getItemCostPrice(it) * it.quantity,
+          0
+        );
+        const profit = taxable - cogs;
+
         map[day].bills += 1;
-        map[day].gross += inv.subtotal || (inv.grandTotal - (inv.gstAmount || 0));
-        map[day].discount += getInvoiceDiscount(inv);
+        map[day].gross += gross;
+        map[day].discount += discount;
+        map[day].cogs += cogs;
+        map[day].profit += profit;
         map[day].gst += inv.gstAmount || 0;
         map[day].net += inv.grandTotal;
       });
@@ -152,6 +256,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
           bills: number;
           gross: number;
           discount: number;
+          cogs: number;
+          profit: number;
           gst: number;
           net: number;
         }
@@ -160,11 +266,31 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
       filteredInvoices.forEach((inv) => {
         const m = inv.dateTime.substring(0, 7);
         if (!map[m]) {
-          map[m] = { month: m, bills: 0, gross: 0, discount: 0, gst: 0, net: 0 };
+          map[m] = {
+            month: m,
+            bills: 0,
+            gross: 0,
+            discount: 0,
+            cogs: 0,
+            profit: 0,
+            gst: 0,
+            net: 0,
+          };
         }
+        const gross = inv.subtotal || (inv.grandTotal - (inv.gstAmount || 0));
+        const discount = getInvoiceDiscount(inv);
+        const taxable = Math.max(0, gross - discount);
+        const cogs = inv.items.reduce(
+          (s, it) => s + getItemCostPrice(it) * it.quantity,
+          0
+        );
+        const profit = taxable - cogs;
+
         map[m].bills += 1;
-        map[m].gross += inv.subtotal || (inv.grandTotal - (inv.gstAmount || 0));
-        map[m].discount += getInvoiceDiscount(inv);
+        map[m].gross += gross;
+        map[m].discount += discount;
+        map[m].cogs += cogs;
+        map[m].profit += profit;
         map[m].gst += inv.gstAmount || 0;
         map[m].net += inv.grandTotal;
       });
@@ -173,7 +299,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
     }
 
     return [];
-  }, [filteredInvoices, reportPeriod]);
+  }, [filteredInvoices, reportPeriod, productCostMap]);
 
   const formatDayDate = (dateStr: string) => {
     try {
@@ -209,25 +335,57 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
     return map;
   }, [filteredInvoices]);
 
-  // Top Selling Items
+  // Top Selling Items with Profit
   const topItems = useMemo(() => {
-    const itemMap: Record<string, { name: string; qty: number; total: number; unit: string }> = {};
+    const itemMap: Record<
+      string,
+      {
+        name: string;
+        qty: number;
+        total: number;
+        cost: number;
+        profit: number;
+        margin: number;
+        unit: string;
+      }
+    > = {};
+
     filteredInvoices.forEach((inv) => {
       inv.items.forEach((it) => {
+        const unitCost = getItemCostPrice(it);
+        const itemCogs = unitCost * it.quantity;
+        const itemRev = it.lineTotal;
+        const itemProfit = itemRev - itemCogs;
+
         if (!itemMap[it.productNameSnapshot]) {
           itemMap[it.productNameSnapshot] = {
             name: it.productNameSnapshot,
             qty: 0,
             total: 0,
+            cost: 0,
+            profit: 0,
+            margin: 0,
             unit: it.unit,
           };
         }
         itemMap[it.productNameSnapshot].qty += it.quantity;
-        itemMap[it.productNameSnapshot].total += it.lineTotal;
+        itemMap[it.productNameSnapshot].total += itemRev;
+        itemMap[it.productNameSnapshot].cost += itemCogs;
+        itemMap[it.productNameSnapshot].profit += itemProfit;
       });
     });
-    return Object.values(itemMap).sort((a, b) => b.total - a.total).slice(0, 5);
-  }, [filteredInvoices]);
+
+    return Object.values(itemMap)
+      .map((item) => ({
+        ...item,
+        margin:
+          item.total > 0
+            ? Number(((item.profit / item.total) * 100).toFixed(1))
+            : 0,
+      }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5);
+  }, [filteredInvoices, productCostMap]);
 
   const selectedPeriodLabel = useMemo(() => {
     if (reportPeriod === 'daily') return `Date: ${selectedDate}`;
@@ -241,6 +399,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
         period: reportPeriod,
         selectedPeriodLabel,
         totalRevenue,
+        totalProfit,
+        totalCost: totalCostOfGoods,
+        profitMargin: profitMarginPercent,
         totalBills,
         totalDiscount,
         totalGst,
@@ -350,52 +511,124 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
       </div>
 
       {/* Primary Metrics Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-xs">
-          <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">
-            Total Revenue
-          </span>
-          <div className="text-2xl font-bold text-zinc-950 font-mono mt-1">
-            {formatINR(totalRevenue)}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+        {/* Card 1: Total Revenue */}
+        <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">
+                Total Revenue
+              </span>
+              <span className="p-1 rounded bg-amber-50 text-amber-600">
+                <BarChart3 className="w-3.5 h-3.5" />
+              </span>
+            </div>
+            <div className="text-2xl font-bold text-zinc-950 font-mono mt-1">
+              {formatINR(totalRevenue)}
+            </div>
+          </div>
+          <div className="mt-2.5 pt-2 border-t border-zinc-100 flex items-center justify-between text-[11px] text-zinc-500">
+            <span>Pre-Tax Sales:</span>
+            <span className="font-mono font-medium text-zinc-700">{formatINR(netTaxableSales)}</span>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-xs">
-          <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">
-            Bills Issued
-          </span>
-          <div className="text-2xl font-bold text-zinc-950 font-mono mt-1">
-            {totalBills}
+        {/* Card 2: Gross Profit (Directly near Revenue card) */}
+        <div className="bg-white p-5 rounded-xl border-2 border-emerald-500/40 bg-gradient-to-b from-emerald-50/50 via-white to-white shadow-xs relative overflow-hidden flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1.5">
+                <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
+                Gross Profit
+              </span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[10px] font-bold font-mono ${
+                  totalProfit >= 0
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-rose-100 text-rose-800'
+                }`}
+                title="Profit Margin % on pre-tax sales"
+              >
+                {profitMarginPercent >= 0 ? `+${profitMarginPercent}%` : `${profitMarginPercent}%`} Margin
+              </span>
+            </div>
+            <div className="text-2xl font-bold text-emerald-700 font-mono mt-1">
+              {formatINR(totalProfit)}
+            </div>
+          </div>
+          <div
+            className="mt-2.5 pt-2 border-t border-emerald-100/80 flex items-center justify-between text-[11px] text-zinc-500"
+            title="Calculated from (Selling Price - Cost Price) across sold items minus bill discounts"
+          >
+            <span className="truncate">Cost Price (COGS):</span>
+            <span className="font-mono font-medium text-zinc-700 ml-1 shrink-0">{formatINR(totalCostOfGoods)}</span>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-xs">
-          <div className="flex items-center justify-between">
+        {/* Card 3: Bills Issued */}
+        <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-xs flex flex-col justify-between">
+          <div>
             <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">
-              Total Discount
+              Bills Issued
             </span>
-            <Tag className="w-3.5 h-3.5 text-orange-500" />
+            <div className="text-2xl font-bold text-zinc-950 font-mono mt-1">
+              {totalBills}
+            </div>
           </div>
-          <div className="text-2xl font-bold text-orange-600 font-mono mt-1">
-            {formatINR(totalDiscount)}
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-xs">
-          <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">
-            GST Collected
-          </span>
-          <div className="text-2xl font-bold text-zinc-900 font-mono mt-1">
-            {formatINR(totalGst)}
+          <div className="mt-2.5 pt-2 border-t border-zinc-100 flex items-center justify-between text-[11px] text-zinc-500">
+            <span>Avg Ticket:</span>
+            <span className="font-mono font-medium text-zinc-700">{formatINR(avgBillValue)}</span>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-xs">
-          <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">
-            Quantity Sold
-          </span>
-          <div className="text-2xl font-bold text-zinc-950 font-mono mt-1">
-            {totalUnitsSold} <span className="text-sm font-normal text-zinc-500">items</span>
+        {/* Card 4: Total Discount */}
+        <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">
+                Total Discount
+              </span>
+              <Tag className="w-3.5 h-3.5 text-orange-500" />
+            </div>
+            <div className="text-2xl font-bold text-orange-600 font-mono mt-1">
+              {formatINR(totalDiscount)}
+            </div>
+          </div>
+          <div className="mt-2.5 pt-2 border-t border-zinc-100 flex items-center justify-between text-[11px] text-zinc-500">
+            <span>Concessions:</span>
+            <span className="font-mono font-medium text-orange-700">{discountedBillsCount} bills</span>
+          </div>
+        </div>
+
+        {/* Card 5: GST Collected */}
+        <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">
+              GST Collected
+            </span>
+            <div className="text-2xl font-bold text-zinc-900 font-mono mt-1">
+              {formatINR(totalGst)}
+            </div>
+          </div>
+          <div className="mt-2.5 pt-2 border-t border-zinc-100 flex items-center justify-between text-[11px] text-zinc-500">
+            <span>Tax Type:</span>
+            <span className="font-medium text-zinc-700">CGST + SGST</span>
+          </div>
+        </div>
+
+        {/* Card 6: Quantity Sold */}
+        <div className="bg-white p-5 rounded-xl border border-zinc-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block">
+              Quantity Sold
+            </span>
+            <div className="text-2xl font-bold text-zinc-950 font-mono mt-1">
+              {totalUnitsSold} <span className="text-sm font-normal text-zinc-500">items</span>
+            </div>
+          </div>
+          <div className="mt-2.5 pt-2 border-t border-zinc-100 flex items-center justify-between text-[11px] text-zinc-500">
+            <span>Active SKUs:</span>
+            <span className="font-mono font-medium text-zinc-700">{topItems.length} top</span>
           </div>
         </div>
       </div>
@@ -439,10 +672,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
 
         {/* Top Selling Items */}
         <div className="lg:col-span-7 bg-white p-5 rounded-xl border border-zinc-200 shadow-xs space-y-4">
-          <h3 className="text-sm font-bold text-zinc-950 flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-orange-500" />
-            Top Selling Electrical Items
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-zinc-950 flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-orange-500" />
+              Top Selling Electrical Items
+            </h3>
+            <span className="text-[11px] text-zinc-500 font-medium">
+              Profit based on cost vs selling price
+            </span>
+          </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
@@ -452,12 +690,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                   <th className="pb-2.5">Product Name</th>
                   <th className="pb-2.5 text-center">Units</th>
                   <th className="pb-2.5 text-right">Revenue</th>
+                  <th className="pb-2.5 text-right text-emerald-700">Gross Profit</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
                 {topItems.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="py-6 text-center text-zinc-400">
+                    <td colSpan={5} className="py-6 text-center text-zinc-400">
                       No sales data available for this duration.
                     </td>
                   </tr>
@@ -471,6 +710,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                       </td>
                       <td className="py-2.5 text-right font-mono font-bold text-zinc-950">
                         {formatINR(item.total)}
+                      </td>
+                      <td className="py-2.5 text-right font-mono">
+                        <span className="font-bold text-emerald-700">{formatINR(item.profit)}</span>
+                        <span className="text-[10px] text-emerald-600 block font-medium">({item.margin}%)</span>
                       </td>
                     </tr>
                   ))
@@ -521,6 +764,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                   <th className="pb-2.5 text-center">Items</th>
                   <th className="pb-2.5 text-right">Gross Amount</th>
                   <th className="pb-2.5 text-right text-orange-600">Discount Conceded</th>
+                  <th className="pb-2.5 text-right text-emerald-700">Gross Profit</th>
                   <th className="pb-2.5 text-right">GST (Tax)</th>
                   <th className="pb-2.5 text-right">Grand Total</th>
                 </tr>
@@ -528,7 +772,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
               <tbody className="divide-y divide-zinc-100">
                 {timeOrderBreakdown.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-zinc-400">
+                    <td colSpan={9} className="py-8 text-center text-zinc-400">
                       No invoices recorded for {selectedDate}.
                     </td>
                   </tr>
@@ -565,6 +809,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                             <span className="text-zinc-400">₹0.00</span>
                           )}
                         </td>
+                        <td className="py-2.5 text-right font-mono">
+                          <span className="font-bold text-emerald-700">{formatINR(row.profit)}</span>
+                          <span className="text-[10px] text-emerald-600 block font-normal">({row.margin}%)</span>
+                        </td>
                         <td className="py-2.5 text-right font-mono text-zinc-600">
                           {formatINR(row.gst)}
                         </td>
@@ -587,6 +835,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                     <td className="py-3 text-right font-mono text-orange-600 font-bold">
                       -{formatINR(totalDiscount)}
                     </td>
+                    <td className="py-3 text-right font-mono text-emerald-700 font-bold">
+                      {formatINR(totalProfit)}
+                    </td>
                     <td className="py-3 text-right font-mono">{formatINR(totalGst)}</td>
                     <td className="py-3 text-right font-mono font-bold text-zinc-950">
                       {formatINR(totalRevenue)}
@@ -605,6 +856,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                   <th className="pb-2.5 text-center">Bills Count</th>
                   <th className="pb-2.5 text-right">Gross Subtotal</th>
                   <th className="pb-2.5 text-right text-orange-600">Total Discount</th>
+                  <th className="pb-2.5 text-right text-emerald-700">Gross Profit</th>
                   <th className="pb-2.5 text-right">GST Collected</th>
                   <th className="pb-2.5 text-right">Net Revenue</th>
                   <th className="pb-2.5 text-right">Avg Ticket</th>
@@ -613,7 +865,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
               <tbody className="divide-y divide-zinc-100">
                 {timeOrderBreakdown.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-8 text-center text-zinc-400">
+                    <td colSpan={8} className="py-8 text-center text-zinc-400">
                       No sales records found for this {reportPeriod === 'monthly' ? 'month' : 'year'}.
                     </td>
                   </tr>
@@ -639,6 +891,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                           ) : (
                             <span className="text-zinc-400">₹0.00</span>
                           )}
+                        </td>
+                        <td className="py-2.5 text-right font-mono font-bold text-emerald-700">
+                          {formatINR(row.profit)}
                         </td>
                         <td className="py-2.5 text-right font-mono text-zinc-600">
                           {formatINR(row.gst)}
@@ -666,6 +921,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                     <td className="py-3 text-right font-mono">{formatINR(totalGross)}</td>
                     <td className="py-3 text-right font-mono text-orange-600 font-bold">
                       -{formatINR(totalDiscount)}
+                    </td>
+                    <td className="py-3 text-right font-mono text-emerald-700 font-bold">
+                      {formatINR(totalProfit)}
                     </td>
                     <td className="py-3 text-right font-mono">{formatINR(totalGst)}</td>
                     <td className="py-3 text-right font-mono font-bold text-zinc-950">
@@ -746,17 +1004,19 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                     />
                     <div>
                       <h1 className="text-xl font-bold text-slate-900 uppercase tracking-tight">
-                        {settings.shopName && !settings.shopName.toLowerCase().includes('electroflow')
-                          ? settings.shopName
-                          : 'Sri Senthur Velan Electricals and Pipes'}
+                        {settings.shopName || 'Store'}
                       </h1>
-                      <p className="text-xs text-slate-500">{settings.tagline}</p>
-                      <p className="text-xs text-slate-600 mt-1">
-                        {formatShopAddress(settings) || 'Store Address'}
-                      </p>
-                      <p className="text-xs text-slate-600">
-                        Phone: {settings.phone} {settings.gstin && `| GSTIN: ${settings.gstin}`}
-                      </p>
+                      {settings.tagline && <p className="text-xs text-slate-500">{settings.tagline}</p>}
+                      {formatShopAddress(settings) && (
+                        <p className="text-xs text-slate-600 mt-1">
+                          {formatShopAddress(settings)}
+                        </p>
+                      )}
+                      {formatShopContactLine(settings) && (
+                        <p className="text-xs text-slate-600">
+                          {formatShopContactLine(settings)}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -774,13 +1034,21 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                 </div>
               </div>
 
-              {/* 5 Summary Cards */}
-              <div className="grid grid-cols-5 gap-2 mb-6 print-summary-grid-5 print-avoid-break">
+              {/* 6 Summary Cards */}
+              <div className="grid grid-cols-6 gap-2 mb-6 print-summary-grid-6 print-avoid-break">
                 <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
                   <span className="text-[10px] uppercase font-bold text-amber-800 block">Total Revenue</span>
                   <span className="text-base font-bold text-amber-950 font-mono mt-0.5 block">
                     {formatINR(totalRevenue)}
                   </span>
+                  <span className="text-[10px] text-amber-700 font-mono block">Pre-tax: {formatINR(netTaxableSales)}</span>
+                </div>
+                <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-300">
+                  <span className="text-[10px] uppercase font-bold text-emerald-800 block">Gross Profit</span>
+                  <span className="text-base font-bold text-emerald-950 font-mono mt-0.5 block">
+                    {formatINR(totalProfit)}
+                  </span>
+                  <span className="text-[10px] text-emerald-700 font-mono block">Margin: {profitMarginPercent}%</span>
                 </div>
                 <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
                   <span className="text-[10px] uppercase font-bold text-slate-500 block">Total Invoices</span>
@@ -796,17 +1064,19 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                   </span>
                   <span className="text-[10px] text-orange-700 font-mono block">{discountedBillsCount} bills</span>
                 </div>
-                <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-200">
-                  <span className="text-[10px] uppercase font-bold text-emerald-800 block">GST Collected</span>
-                  <span className="text-base font-bold text-emerald-950 font-mono mt-0.5 block">
+                <div className="p-3 bg-indigo-50 rounded-lg border border-indigo-200">
+                  <span className="text-[10px] uppercase font-bold text-indigo-800 block">GST Collected</span>
+                  <span className="text-base font-bold text-indigo-950 font-mono mt-0.5 block">
                     {formatINR(totalGst)}
                   </span>
+                  <span className="text-[10px] text-indigo-700 block">Output Tax</span>
                 </div>
                 <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
                   <span className="text-[10px] uppercase font-bold text-slate-500 block">Units Sold</span>
                   <span className="text-base font-bold text-slate-900 font-mono mt-0.5 block">
                     {totalUnitsSold} Units
                   </span>
+                  <span className="text-[10px] text-slate-500 block">Dispensed</span>
                 </div>
               </div>
 
@@ -874,14 +1144,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                     <tr>
                       <th className="py-2 px-3 border-r border-slate-200 text-center w-12">#</th>
                       <th className="py-2 px-3 border-r border-slate-200 text-left">Product Name</th>
-                      <th className="py-2 px-3 border-r border-slate-200 text-center w-28">Units Sold</th>
-                      <th className="py-2 px-3 text-right w-36">Revenue</th>
+                      <th className="py-2 px-3 border-r border-slate-200 text-center w-24">Units Sold</th>
+                      <th className="py-2 px-3 text-right w-28 border-r border-slate-200">Revenue</th>
+                      <th className="py-2 px-3 text-right w-32 text-emerald-800">Gross Profit</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 text-xs">
                     {topItems.length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="py-4 text-center text-slate-400">
+                        <td colSpan={5} className="py-4 text-center text-slate-400">
                           No product sales recorded in this period.
                         </td>
                       </tr>
@@ -891,7 +1162,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                           <td className="py-2 px-3 border-r border-slate-200 text-center text-slate-500 font-mono">{idx + 1}</td>
                           <td className="py-2 px-3 border-r border-slate-200 font-semibold text-slate-900 text-left">{item.name}</td>
                           <td className="py-2 px-3 border-r border-slate-200 text-center font-mono">{item.qty} {item.unit}</td>
-                          <td className="py-2 px-3 text-right font-mono font-bold text-slate-900">{formatINR(item.total)}</td>
+                          <td className="py-2 px-3 border-r border-slate-200 text-right font-mono font-bold text-slate-900">{formatINR(item.total)}</td>
+                          <td className="py-2 px-3 text-right font-mono font-bold text-emerald-800">
+                            {formatINR(item.profit)} <span className="text-[10px] font-normal text-emerald-700">({item.margin}%)</span>
+                          </td>
                         </tr>
                       ))
                     )}
@@ -922,6 +1196,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                       </th>
                       <th className="py-2 px-3 border-r border-slate-200 text-right">Gross Subtotal</th>
                       <th className="py-2 px-3 border-r border-slate-200 text-right text-orange-800">Discount Conceded</th>
+                      <th className="py-2 px-3 border-r border-slate-200 text-right text-emerald-800">Gross Profit</th>
                       <th className="py-2 px-3 border-r border-slate-200 text-right">GST</th>
                       <th className="py-2 px-3 text-right">Net Total</th>
                     </tr>
@@ -929,7 +1204,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                   <tbody className="divide-y divide-slate-200 text-xs">
                     {timeOrderBreakdown.length === 0 ? (
                       <tr>
-                        <td colSpan={reportPeriod === 'daily' ? 7 : 6} className="py-4 text-center text-slate-400">
+                        <td colSpan={reportPeriod === 'daily' ? 8 : 7} className="py-4 text-center text-slate-400">
                           No transactions recorded during this period.
                         </td>
                       </tr>
@@ -954,6 +1229,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                           </td>
                           <td className="py-1.5 px-3 border-r border-slate-200 text-right font-mono font-semibold text-orange-700">
                             {row.discount > 0 ? `-${formatINR(row.discount)}` : '₹0.00'}
+                          </td>
+                          <td className="py-1.5 px-3 border-r border-slate-200 text-right font-mono font-bold text-emerald-800">
+                            {formatINR(row.profit)}
                           </td>
                           <td className="py-1.5 px-3 border-r border-slate-200 text-right font-mono">
                             {formatINR(row.gst)}
@@ -982,6 +1260,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings }) 
                         </td>
                         <td className="py-2 px-3 border-r border-slate-200 text-right font-mono text-orange-700">
                           -{formatINR(totalDiscount)}
+                        </td>
+                        <td className="py-2 px-3 border-r border-slate-200 text-right font-mono text-emerald-800 font-bold">
+                          {formatINR(totalProfit)}
                         </td>
                         <td className="py-2 px-3 border-r border-slate-200 text-right font-mono">
                           {formatINR(totalGst)}

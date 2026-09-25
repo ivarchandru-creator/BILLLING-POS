@@ -1,6 +1,7 @@
 export type PaymentMethod = 'cash' | 'upi' | 'card' | 'credit';
 export type PrinterType = 'thermal' | 'ink';
 export type ThermalWidth = '58mm' | '80mm';
+export type BillPaperSize = 'a5' | 'a4' | 'thermal';
 export type StockTransactionType = 'purchase' | 'sale' | 'adjustment' | 'return';
 export type ActiveTab = 'dashboard' | 'billing' | 'inventory' | 'customers' | 'suppliers' | 'invoices' | 'reports' | 'settings';
 
@@ -41,6 +42,8 @@ export interface InvoiceItem {
   productNameSnapshot: string;
   quantity: number;
   unitPrice: number;
+  purchasePrice?: number; // Snapshot of cost/purchase price at time of sale
+  costPrice?: number; // Alias for purchase/cost price
   lineTotal: number;
   gstRate: number;
   unit: string;
@@ -73,7 +76,7 @@ export interface Invoice {
   creditPaid?: boolean;
   creditPaidDate?: string;
   printerType: PrinterType;
-  templateType: ThermalWidth | 'a4';
+  templateType: ThermalWidth | 'a4' | 'a5';
   createdBy: string;
   notes?: string;
   status: 'completed' | 'cancelled';
@@ -142,7 +145,7 @@ export interface ShopSettings {
   defaultPrinterType: PrinterType;
   thermalPaperWidth: ThermalWidth;
   defaultGstOn: boolean;
-  defaultGstRate: number;
+  defaultGstRate?: number;
   footerMessage: string;
   termsAndConditions: string;
   currentUserRole: 'admin' | 'staff';
@@ -160,13 +163,41 @@ export interface DraftBillingState {
   paymentMethod: PaymentMethod;
   paymentDueDate: string;
   isGstBill: boolean;
-  overrideGstRate: number;
+  overrideGstRate?: number;
   discountType?: 'amount' | 'percentage';
   discountAmount?: number;
   discountPercent: number;
   cashTendered: string;
   activeInvoiceId?: string;
   activeInvoiceNumber?: string;
+  billPaperSize?: BillPaperSize;
+}
+
+export interface HeldInvoice {
+  id: string;
+  holdNumber: number;
+  heldAt: string;
+  customerName: string;
+  customerPhone: string;
+  customerAddress?: string;
+  customerGstin?: string;
+  customerCategory?: 'walk-in' | 'electrician' | 'contractor' | 'wholesale' | 'retail';
+  selectedCustomerId?: string;
+  cartItems: InvoiceItem[];
+  paymentMethod: PaymentMethod;
+  paymentDueDate: string;
+  isGstBill: boolean;
+  discountType?: 'amount' | 'percentage';
+  discountAmount?: number;
+  discountPercent?: number;
+  discountAmountInput?: string;
+  discountPercentInput?: string;
+  cashTendered?: string;
+  note?: string;
+  activeInvoiceId?: string;
+  activeInvoiceNumber?: string;
+  subtotal: number;
+  grandTotal: number;
 }
 
 export interface AdminUser {

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Users,
   Plus,
@@ -10,6 +10,9 @@ import {
   Building,
   CheckCircle2,
   Download,
+  Trash2,
+  Edit2,
+  AlertTriangle,
 } from 'lucide-react';
 import { Customer, Invoice, ShopSettings } from '../types';
 import { formatINR } from '../utils/formatters';
@@ -19,7 +22,9 @@ interface CustomersViewProps {
   customers: Customer[];
   invoices?: Invoice[];
   settings?: ShopSettings;
+  initialCreditFilter?: boolean;
   onSaveCustomer: (customer: Customer) => void;
+  onDeleteCustomer?: (customerId: string) => void;
   onSelectCustomerToBill?: (customer: Customer) => void;
 }
 
@@ -27,13 +32,24 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
   customers,
   invoices = [],
   settings = { shopName: '' } as ShopSettings,
+  initialCreditFilter = false,
   onSaveCustomer,
+  onDeleteCustomer,
   onSelectCustomerToBill,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
+  const [showCreditOnly, setShowCreditOnly] = useState<boolean>(Boolean(initialCreditFilter));
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [deleteConfirmCustomer, setDeleteConfirmCustomer] = useState<Customer | null>(null);
+
+  useEffect(() => {
+    if (initialCreditFilter !== undefined) {
+      setShowCreditOnly(Boolean(initialCreditFilter));
+    }
+  }, [initialCreditFilter]);
 
   // Form State
   const [formName, setFormName] = useState('');
@@ -47,6 +63,7 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
   const [formDueDate, setFormDueDate] = useState('');
 
   const openNewCustomerModal = () => {
+    setEditingCustomerId(null);
     setFormName('');
     setFormPhone('');
     setFormEmail('');
@@ -59,27 +76,67 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
     setIsAddModalOpen(true);
   };
 
+  const openEditCustomerModal = (cust: Customer) => {
+    setEditingCustomerId(cust.customerId);
+    setFormName(cust.name);
+    setFormPhone(cust.phone === '—' ? '' : cust.phone || '');
+    setFormEmail(cust.email || '');
+    setFormAddress(cust.address || '');
+    setFormSiteAddress(cust.siteAddress || '');
+    setFormGstin(cust.gstin || '');
+    setFormType(cust.customerType || 'walk-in');
+    setFormCredit(String(cust.creditBalance || 0));
+    setFormDueDate(cust.expectedPaymentDate || '');
+    setIsAddModalOpen(true);
+  };
+
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim()) return;
 
-    const newCust: Customer = {
-      customerId: `cust-${Date.now()}`,
-      name: formName.trim(),
-      phone: formPhone.trim() || '—',
-      email: formEmail.trim() || undefined,
-      address: formAddress.trim() || undefined,
-      siteAddress: formSiteAddress.trim() || formAddress.trim() || undefined,
-      gstin: formGstin.trim() || undefined,
-      customerType: formType,
-      creditBalance: Number(formCredit) || 0,
-      expectedPaymentDate: formDueDate || undefined,
-      totalSpent: 0,
-    };
+    if (editingCustomerId) {
+      const existing = customers.find((c) => c.customerId === editingCustomerId);
+      const updatedCust: Customer = {
+        customerId: editingCustomerId,
+        name: formName.trim(),
+        phone: formPhone.trim() || '—',
+        email: formEmail.trim() || undefined,
+        address: formAddress.trim() || undefined,
+        siteAddress: formSiteAddress.trim() || formAddress.trim() || undefined,
+        gstin: formGstin.trim() || undefined,
+        customerType: formType,
+        creditBalance: Number(formCredit) || 0,
+        expectedPaymentDate: formDueDate || undefined,
+        totalSpent: existing ? existing.totalSpent : 0,
+      };
+      onSaveCustomer(updatedCust);
+      if (selectedCustomer?.customerId === editingCustomerId) {
+        setSelectedCustomer(updatedCust);
+      }
+    } else {
+      const newCust: Customer = {
+        customerId: `cust-${Date.now()}`,
+        name: formName.trim(),
+        phone: formPhone.trim() || '—',
+        email: formEmail.trim() || undefined,
+        address: formAddress.trim() || undefined,
+        siteAddress: formSiteAddress.trim() || formAddress.trim() || undefined,
+        gstin: formGstin.trim() || undefined,
+        customerType: formType,
+        creditBalance: Number(formCredit) || 0,
+        expectedPaymentDate: formDueDate || undefined,
+        totalSpent: 0,
+      };
+      onSaveCustomer(newCust);
+    }
 
-    onSaveCustomer(newCust);
     setIsAddModalOpen(false);
+    setEditingCustomerId(null);
   };
+
+  const creditPendingCount = useMemo(() => {
+    return customers.filter((c) => (c.creditBalance || 0) > 0).length;
+  }, [customers]);
 
   const filteredCustomers = useMemo(() => {
     return customers.filter((c) => {
@@ -96,9 +153,13 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
         return false;
       }
 
+      if (showCreditOnly && !((c.creditBalance || 0) > 0)) {
+        return false;
+      }
+
       return true;
     });
-  }, [customers, searchQuery, typeFilter]);
+  }, [customers, searchQuery, typeFilter, showCreditOnly]);
 
   const getTypeBadge = (type?: string) => {
     switch (type) {
@@ -188,7 +249,42 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
             <option value="wholesale">Wholesale / Builder</option>
           </select>
         </div>
+
+        {/* Credit Pending Quick Filter Toggle */}
+        <button
+          type="button"
+          id="btn-filter-credit-pending-toggle"
+          onClick={() => setShowCreditOnly(!showCreditOnly)}
+          className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-2xs whitespace-nowrap cursor-pointer ${
+            showCreditOnly
+              ? 'bg-amber-500 text-slate-950 font-bold border border-amber-600 ring-2 ring-amber-400/30'
+              : 'bg-white text-slate-700 border border-slate-200/90 hover:bg-slate-50'
+          }`}
+          title="Toggle customers with credit pending balance"
+        >
+          <CreditCard className={`w-4 h-4 ${showCreditOnly ? 'text-slate-950' : 'text-amber-600'}`} />
+          <span>Credit Pending ({creditPendingCount})</span>
+        </button>
       </div>
+
+      {/* Active Filter Banner if Credit Pending Filter is On */}
+      {showCreditOnly && (
+        <div className="flex items-center justify-between px-4 py-2.5 bg-amber-50/90 border border-amber-200 rounded-xl text-xs text-amber-900 shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+            <span>
+              Showing <strong>{filteredCustomers.length}</strong> customer{filteredCustomers.length === 1 ? '' : 's'} with pending credit balance.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCreditOnly(false)}
+            className="text-[11px] font-semibold text-amber-900 hover:text-amber-950 underline cursor-pointer ml-3 shrink-0"
+          >
+            Show All Customers
+          </button>
+        </div>
+      )}
 
       {/* Table Card */}
       <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
@@ -260,13 +356,35 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
                       {formatINR(cust.totalSpent || 0)}
                     </td>
                     <td className="py-3.5 px-5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedCustomer(cust)}
-                        className="text-orange-500 hover:text-orange-600 font-medium text-xs"
-                      >
-                        Details
-                      </button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedCustomer(cust)}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded transition-colors cursor-pointer"
+                          title="View customer ledger statement & details"
+                        >
+                          Details
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openEditCustomerModal(cust)}
+                          className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                          title="Edit customer details"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        {onDeleteCustomer && (
+                          <button
+                            type="button"
+                            id={`btn-delete-customer-${cust.customerId}`}
+                            onClick={() => setDeleteConfirmCustomer(cust)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title={`Delete customer ${cust.name}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -276,19 +394,24 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
         </div>
       </div>
 
-      {/* Add Customer Modal */}
+      {/* Add / Edit Customer Modal */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4 border border-slate-200 animate-scale-up">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 text-orange-500" />
-                <h3 className="font-bold text-sm text-slate-900">Add Customer / Contractor</h3>
+                <h3 className="font-bold text-sm text-slate-900">
+                  {editingCustomerId ? 'Edit Customer / Contractor' : 'Add Customer / Contractor'}
+                </h3>
               </div>
               <button
                 type="button"
-                onClick={() => setIsAddModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded"
+                onClick={() => {
+                  setIsAddModalOpen(false);
+                  setEditingCustomerId(null);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -391,20 +514,43 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold text-xs shadow-xs"
-                >
-                  Save Customer
-                </button>
+              <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
+                <div>
+                  {editingCustomerId && onDeleteCustomer && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cust = customers.find((c) => c.customerId === editingCustomerId);
+                        setIsAddModalOpen(false);
+                        setEditingCustomerId(null);
+                        if (cust) setDeleteConfirmCustomer(cust);
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Customer</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddModalOpen(false);
+                      setEditingCustomerId(null);
+                    }}
+                    className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium text-xs cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold text-xs shadow-xs cursor-pointer"
+                  >
+                    {editingCustomerId ? 'Update Customer' : 'Save Customer'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -498,31 +644,119 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
               </div>
             )}
 
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-              <button
-                type="button"
-                id="btn-download-customer-statement"
-                onClick={() => {
-                  const custInvoices = invoices.filter(
-                    (inv) =>
-                      inv.customerId === selectedCustomer.customerId ||
-                      inv.customerPhone === selectedCustomer.phone
-                  );
-                  downloadCustomerLedgerPdf(selectedCustomer, custInvoices, settings);
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold shadow-2xs transition-colors"
-                title="Download standard A4 Statement of Account (210 x 297 mm)"
-              >
-                <Download className="w-3.5 h-3.5 text-orange-400" />
-                <span>Download A4 Statement</span>
-              </button>
+            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const c = selectedCustomer;
+                    setSelectedCustomer(null);
+                    openEditCustomerModal(c);
+                  }}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Edit</span>
+                </button>
+                {onDeleteCustomer && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const c = selectedCustomer;
+                      setSelectedCustomer(null);
+                      setDeleteConfirmCustomer(c);
+                    }}
+                    className="flex items-center gap-1 px-3 py-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete</span>
+                  </button>
+                )}
+              </div>
 
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  id="btn-download-customer-statement"
+                  onClick={() => {
+                    const custInvoices = invoices.filter(
+                      (inv) =>
+                        inv.customerId === selectedCustomer.customerId ||
+                        inv.customerPhone === selectedCustomer.phone
+                    );
+                    downloadCustomerLedgerPdf(selectedCustomer, custInvoices, settings);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+                  title="Download standard A4 Statement of Account (210 x 297 mm)"
+                >
+                  <Download className="w-3.5 h-3.5 text-orange-400" />
+                  <span>Download Statement</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedCustomer(null)}
+                  className="px-4 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Customer Confirmation Modal */}
+      {deleteConfirmCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-200 animate-scale-up">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="p-2.5 bg-rose-100 rounded-xl">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-slate-900">Delete Customer?</h3>
+                <p className="text-xs text-slate-500">Remove customer record from database</p>
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-600 space-y-2 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+              <p>
+                Are you sure you want to delete <strong className="text-slate-900">{deleteConfirmCustomer.name}</strong>?
+              </p>
+              <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200">
+                <span>Phone: <strong className="text-slate-700">{deleteConfirmCustomer.phone || '—'}</strong></span>
+                <span>Type: <strong className="text-slate-700 capitalize">{deleteConfirmCustomer.customerType}</strong></span>
+              </div>
+              {(deleteConfirmCustomer.creditBalance || 0) > 0 && (
+                <div className="flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-[11px] font-medium">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <span>
+                    Warning: This customer currently has an outstanding credit balance of <strong>{formatINR(deleteConfirmCustomer.creditBalance)}</strong>.
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
               <button
                 type="button"
-                onClick={() => setSelectedCustomer(null)}
-                className="px-4 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold"
+                onClick={() => setDeleteConfirmCustomer(null)}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 font-medium text-xs transition-colors cursor-pointer"
               >
-                Close
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onDeleteCustomer) {
+                    onDeleteCustomer(deleteConfirmCustomer.customerId);
+                  }
+                  setDeleteConfirmCustomer(null);
+                }}
+                className="px-5 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs shadow-sm transition-colors cursor-pointer"
+              >
+                Delete Customer
               </button>
             </div>
           </div>

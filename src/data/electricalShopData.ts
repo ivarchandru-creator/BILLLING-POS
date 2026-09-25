@@ -13,7 +13,7 @@ export const ELECTRICAL_CATEGORIES = [
 
 export const INITIAL_SHOP_SETTINGS: ShopSettings = {
   shopName: 'Sri Senthur Velan Electricals and Pipes',
-  tagline: 'Electricals, Pipes & Hardware Retail',
+  tagline: 'Your trusted electrical partner',
   ownerName: 'Tpk Chandru',
   phone: '98450 12345',
   alternatePhone: '94430 67890',

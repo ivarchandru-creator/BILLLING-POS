@@ -2,7 +2,14 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Invoice, ShopSettings, Customer, Product, Supplier, SupplierTransaction } from '../types';
 import { LOGO_BASE64, LOGO_PDF_BASE64 } from './logoData';
-import { getInvoiceDiscount, formatShopAddress, formatInvoiceDate, formatInvoiceTime } from './formatters';
+import {
+  getInvoiceDiscount,
+  formatShopAddress,
+  formatShopPhone,
+  formatShopContactLine,
+  formatInvoiceDate,
+  formatInvoiceTime,
+} from './formatters';
 
 /**
  * Helper to render the official brand logo in the top-left corner of any PDF
@@ -18,7 +25,7 @@ function drawTopLeftLogo(
   const customAspectRatio = settings?.logoAspectRatio;
   const ratio = customAspectRatio && customAspectRatio > 0.1 && customAspectRatio < 10
     ? customAspectRatio
-    : (242 / 374); // Natural aspect ratio ~0.647
+    : (242 / 374);
   const width = Number((height * ratio).toFixed(2));
 
   if (settings?.logoUrl && settings.logoUrl.startsWith('data:image/')) {
@@ -49,6 +56,7 @@ function drawTopLeftLogo(
   try {
     if (LOGO_BASE64) {
       doc.addImage(LOGO_BASE64, 'PNG', leftX, topY, width, height);
+      return { width, height };
     }
   } catch (err) {
     console.warn('Could not draw top-left logo on PDF:', err);
@@ -125,161 +133,228 @@ function addA4PageFooters(
   }
 }
 
+interface StandardReportHeaderOptions {
+  doc: jsPDF;
+  settings: ShopSettings;
+  reportTitle: string;
+  reportSubtitle?: string;
+  rightMetaLines?: string[];
+  startY?: number;
+  logoHeight?: number;
+}
+
 /**
- * 1. Generates and downloads an official GST / Retail Invoice PDF strictly formatted
- *    for standard ISO A4 paper (210mm x 297mm portrait).
+ * Renders the official brand logo, dynamic shop details (name, address, phone, GSTIN)
+ * from settings, report title, and right-aligned generation metadata.
+ * Returns the Y coordinate immediately below the header with comfortable padding.
  */
-export function downloadInvoicePdf(invoice: Invoice, settings: ShopSettings): void {
+function drawStandardReportHeader({
+  doc,
+  settings,
+  reportTitle,
+  reportSubtitle,
+  rightMetaLines = [],
+  startY = 11.2,
+  logoHeight = 14,
+}: StandardReportHeaderOptions): number {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const leftX = 14;
+  const rightX = pageWidth - 14;
+
+  // 1. Draw top-left brand logo
+  const logoDim = drawTopLeftLogo(doc, leftX, startY, logoHeight, settings);
+  const brandX = leftX + logoDim.width + 4;
+
+  // 2. Right Meta block (Generated time, filters, etc.)
+  if (rightMetaLines.length > 0) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139);
+    let metaY = startY + 4.2;
+    for (const line of rightMetaLines) {
+      if (line) {
+        doc.text(line, rightX, metaY, { align: 'right' });
+        metaY += 4.5;
+      }
+    }
+  }
+
+  // Calculate available text width for left header before hitting right meta
+  const rightReservedWidth = rightMetaLines.length > 0 ? 84 : 20;
+  const maxTextWidth = Math.max(pageWidth - brandX - rightReservedWidth, 90);
+
+  let curY = startY + 4.2;
+
+  // Business Name from Settings (with safe fallback)
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.setTextColor(15, 23, 42); // slate-900
+  const displayName = settings.shopName || 'Sri Senthur Velan Electricals and Pipes';
+  doc.text(displayName, brandX, curY);
+  curY += 4.8;
+
+  // Report Title Badge
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(234, 88, 12); // orange-600
+  doc.text(reportTitle, brandX, curY);
+  curY += 4.2;
+
+  // Shop Address from Settings (Street, City, State, PIN)
+  const shopAddress = formatShopAddress(settings);
+  if (shopAddress) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(71, 85, 105); // slate-600
+    const addrLines = doc.splitTextToSize(shopAddress, maxTextWidth);
+    doc.text(addrLines, brandX, curY);
+    curY += addrLines.length * 3.4;
+  }
+
+  // Shop Contact details from Settings (Phone, Alternate Phone, GSTIN, Email)
+  const contactLine = formatShopContactLine(settings);
+  if (contactLine) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(51, 65, 85); // slate-700
+    const contactLines = doc.splitTextToSize(contactLine, maxTextWidth);
+    doc.text(contactLines, brandX, curY);
+    curY += contactLines.length * 3.4;
+  }
+
+  // Subtitle / Filter Description if provided
+  if (reportSubtitle) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    const subLines = doc.splitTextToSize(reportSubtitle, maxTextWidth);
+    doc.text(subLines, brandX, curY);
+    curY += subLines.length * 3.4;
+  }
+
+  // Ensure clearance below both logo and text block
+  return Math.max(curY + 2.5, startY + logoHeight + 3);
+}
+
+/**
+ * 1. Generates and downloads an official GST / Retail Invoice PDF formatted
+ *    for standard ISO A4 (210mm x 297mm) or ISO A5 (148mm x 210mm) paper.
+ */
+export function downloadInvoicePdf(
+  invoice: Invoice,
+  settings: ShopSettings,
+  paperSize: 'a4' | 'a5' = 'a4'
+): void {
+  const isA5 = paperSize === 'a5';
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: isA5 ? 'a5' : 'a4',
   });
 
-  const pageWidth = doc.internal.pageSize.getWidth(); // 210mm
-  const pageHeight = doc.internal.pageSize.getHeight(); // 297mm
+  const pageWidth = doc.internal.pageSize.getWidth(); // 148mm for A5, 210mm for A4
+  const pageHeight = doc.internal.pageSize.getHeight(); // 210mm for A5, 297mm for A4
+  const marginX = isA5 ? 9 : 14;
+  const contentWidth = pageWidth - marginX * 2;
 
-  // 1. Top-Left Corner Official Store Logo (Properly aligned and sized)
-  const logoHeight = 14;
-  const logoX = 14;
-  const logoY = 11.2;
+  // 1. Optional Custom Logo (if user uploaded their own custom logo in settings)
+  const logoHeight = isA5 ? 11 : 14;
+  const logoX = marginX;
+  const logoY = isA5 ? 8.5 : 11.2;
   const logoDim = drawTopLeftLogo(doc, logoX, logoY, logoHeight, settings);
 
-  // 2. Shop Brand Header (Directly adjacent and straight to the top-left logo)
-  const brandX = logoX + logoDim.width + 3.5;
-  let currentY = 15.5;
+  // 2. Shop Brand Header
+  const brandX = logoDim.width > 0 ? (logoX + logoDim.width + 3) : marginX;
+  let currentY = isA5 ? 8.5 : 11.2;
+
+  // Tagline highlighted above shop name: "Your trusted electrical partner"
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14.5);
+  doc.setFontSize(isA5 ? 7 : 8.5);
+  doc.setTextColor(234, 88, 12); // orange-600
+  doc.text('YOUR TRUSTED ELECTRICAL PARTNER', brandX, currentY);
+  currentY += isA5 ? 3.6 : 4.5;
+
+  // Shop Name
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(isA5 ? 11.5 : 14);
   doc.setTextColor(15, 23, 42); // slate-900
   const displayName = settings.shopName || 'Sri Senthur Velan Electricals and Pipes';
   doc.text(displayName, brandX, currentY);
-  currentY += 4.3;
+  currentY += isA5 ? 3.8 : 4.5;
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(100, 116, 139); // slate-500
-  if (settings.tagline) {
-    doc.text(settings.tagline, brandX, currentY);
-    currentY += 3.8;
-  }
+  const metaRightX = pageWidth - marginX;
+  const maxBrandWidth = Math.max(metaRightX - (isA5 ? 45 : 60) - brandX, isA5 ? 50 : 70);
 
   const shopContact = formatShopAddress(settings);
-
   if (shopContact) {
-    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(isA5 ? 6.5 : 7.5);
     doc.setTextColor(71, 85, 105);
-    doc.text(shopContact, brandX, currentY);
-    currentY += 3.5;
+    const addrLines = doc.splitTextToSize(shopContact, maxBrandWidth);
+    doc.text(addrLines, brandX, currentY);
+    currentY += addrLines.length * (isA5 ? 2.8 : 3.4);
   }
 
-  const phoneGstin = [
-    settings.phone ? `Ph: +91 ${settings.phone}` : '',
-    settings.gstin ? `GSTIN: ${settings.gstin}` : '',
-  ]
-    .filter(Boolean)
-    .join('  |  ');
-
+  const phoneGstin = formatShopContactLine(settings);
   if (phoneGstin) {
-    doc.setFontSize(7.5);
+    doc.setFontSize(isA5 ? 6.5 : 7.5);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(51, 65, 85);
-    doc.text(phoneGstin, brandX, currentY);
-    currentY += 3.5;
+    const contactLines = doc.splitTextToSize(phoneGstin, maxBrandWidth);
+    doc.text(contactLines, brandX, currentY);
+    currentY += contactLines.length * (isA5 ? 2.8 : 3.4);
   }
 
-  // Top-Right: Quick Invoice Meta & Document Type
-  const metaRightX = pageWidth - 14;
-  doc.setFillColor(248, 250, 252);
-  doc.roundedRect(metaRightX - 48, 10, 48, 20.5, 1, 1, 'F');
-  doc.setDrawColor(226, 232, 240);
-  doc.setLineWidth(0.25);
-  doc.roundedRect(metaRightX - 48, 10, 48, 20.5, 1, 1, 'D');
-
+  // Top-Right: Clean Invoice Title, No & Date
+  const docTitle = invoice.gstApplied ? 'TAX INVOICE' : 'CASH MEMO';
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
+  doc.setFontSize(isA5 ? 11 : 13);
   doc.setTextColor(15, 23, 42);
-  doc.text(invoice.gstApplied ? 'TAX INVOICE' : 'CASH MEMO', metaRightX - 24, 13.8, { align: 'center' });
+  doc.text(docTitle, metaRightX, isA5 ? 12 : 15.5, { align: 'right' });
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
+  doc.setFontSize(isA5 ? 7 : 8);
   doc.setTextColor(71, 85, 105);
-  doc.text(`No: ${invoice.invoiceNumber}`, metaRightX - 24, 17.5, { align: 'center' });
-  doc.text(`Date: ${formatInvoiceDate(invoice.dateTime)}`, metaRightX - 24, 21, { align: 'center' });
-  doc.text(`Time: ${formatInvoiceTime(invoice.dateTime)}`, metaRightX - 24, 24.5, { align: 'center' });
-  doc.text(`Mode: ${(invoice.paymentMethod || 'CASH').toUpperCase()}`, metaRightX - 24, 28, { align: 'center' });
+  doc.text(`Invoice No: ${invoice.invoiceNumber}`, metaRightX, isA5 ? 16 : 20, { align: 'right' });
+  doc.text(`Date: ${formatInvoiceDate(invoice.dateTime)}`, metaRightX, isA5 ? 19.5 : 24, { align: 'right' });
 
-  currentY = Math.max(currentY + 2, logoY + logoHeight + 2.5);
+  currentY = Math.max(currentY + 2, isA5 ? 24 : 29);
 
   // Header Divider
-  doc.setDrawColor(226, 232, 240);
-  doc.setLineWidth(0.5);
-  doc.line(14, currentY, pageWidth - 14, currentY);
-  currentY += 5;
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.4);
+  doc.line(marginX, currentY, pageWidth - marginX, currentY);
+  currentY += isA5 ? 3 : 4;
 
-  // Invoice Title Banner (A4 standard)
+  // Billed To Details (Single clean bar)
   doc.setFillColor(248, 250, 252);
-  doc.roundedRect(14, currentY, pageWidth - 28, 7.5, 1, 1, 'F');
+  doc.roundedRect(marginX, currentY, contentWidth, isA5 ? 7.5 : 9, 1, 1, 'F');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10.5);
-  doc.setTextColor(15, 23, 42);
-  doc.text(
-    invoice.gstApplied ? 'TAX INVOICE (GST REGISTRATION)' : 'CASH MEMO',
-    pageWidth / 2,
-    currentY + 5.2,
-    { align: 'center' }
-  );
-  currentY += 12;
-
-  // Two Column Details: Left = Bill To, Right = Invoice Metadata
-  const colLeftX = 14;
-  const colRightX = pageWidth / 2 + 5;
-
-  doc.setFontSize(8.5);
-  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(isA5 ? 7 : 8);
   doc.setTextColor(71, 85, 105);
-  doc.text('BILL TO / CUSTOMER DETAILS:', colLeftX, currentY);
-  doc.text('INVOICE / BILL DETAILS:', colRightX, currentY);
-  currentY += 4.5;
+  doc.text('Billed To:', marginX + 3, currentY + (isA5 ? 4.8 : 5.8));
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
   doc.setTextColor(15, 23, 42);
-  doc.text(invoice.customerName || 'Walk-in Customer (General)', colLeftX, currentY);
+  doc.text(invoice.customerName || 'Walk-in Customer', marginX + (isA5 ? 16 : 21), currentY + (isA5 ? 4.8 : 5.8));
+
+  let custMeta = '';
+  if (invoice.customerPhone) custMeta += `Ph: ${invoice.customerPhone}`;
+  if (invoice.customerGstin) custMeta += (custMeta ? '  |  ' : '') + `GSTIN: ${invoice.customerGstin}`;
+
+  if (custMeta) {
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(custMeta, marginX + (isA5 ? 55 : 85), currentY + (isA5 ? 4.8 : 5.8));
+  }
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(51, 65, 85);
-  doc.text(`Invoice No: ${invoice.invoiceNumber}`, colRightX, currentY);
-  currentY += 4.5;
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Mode: ${invoice.paymentMethod.toUpperCase()}`, metaRightX - 3, currentY + (isA5 ? 4.8 : 5.8), { align: 'right' });
 
-  if (invoice.customerPhone) {
-    doc.text(`Mobile: ${invoice.customerPhone}`, colLeftX, currentY);
-  } else {
-    doc.text(`Category: ${invoice.customerCategory || 'Retail'}`, colLeftX, currentY);
-  }
-  doc.text(`Invoice Date: ${formatInvoiceDate(invoice.dateTime)}`, colRightX, currentY);
-  currentY += 4.5;
-  doc.text(`Invoice Time: ${formatInvoiceTime(invoice.dateTime)}`, colRightX, currentY);
-  currentY += 4.5;
+  currentY += isA5 ? 10 : 13;
 
-  if (invoice.customerAddress) {
-    doc.text(`Site / Address: ${invoice.customerAddress}`, colLeftX, currentY);
-  }
-  const paymentText =
-    invoice.paymentMethod === 'credit'
-      ? `Payment: CREDIT (${invoice.creditPaid ? 'Settled' : `Due: ${invoice.paymentDueDate || 'Pending'}`})`
-      : `Payment: ${invoice.paymentMethod.toUpperCase()}`;
-  doc.text(paymentText, colRightX, currentY);
-  currentY += 4.5;
-
-  if (invoice.customerGstin) {
-    doc.text(`Customer GSTIN: ${invoice.customerGstin}`, colLeftX, currentY);
-    currentY += 4.5;
-  }
-
-  currentY += 4;
-
-  // Itemized Table (calibrated to exact A4 182mm content width)
+  // Itemized Table (calibrated to content width)
   const tableHeaders = invoice.gstApplied
     ? ['#', 'Item Description', 'HSN', 'Qty', 'Unit', 'Rate', 'GST %', 'Amount']
     : ['#', 'Item Description', 'Qty', 'Unit', 'Rate', 'Amount'];
@@ -312,17 +387,17 @@ export function downloadInvoicePdf(invoice: Invoice, settings: ShopSettings): vo
     head: [tableHeaders],
     body: tableBody,
     theme: 'grid',
-    tableWidth: A4_PORTRAIT.contentWidth,
+    tableWidth: contentWidth,
     showHead: 'everyPage',
     headStyles: {
       fillColor: [30, 41, 59], // slate-800
       textColor: [255, 255, 255],
-      fontSize: 8,
+      fontSize: isA5 ? 7 : 8,
       fontStyle: 'bold',
       halign: 'left',
     },
     bodyStyles: {
-      fontSize: 8,
+      fontSize: isA5 ? 7 : 8,
       textColor: [30, 41, 59],
     },
     alternateRowStyles: {
@@ -330,59 +405,53 @@ export function downloadInvoicePdf(invoice: Invoice, settings: ShopSettings): vo
     },
     columnStyles: invoice.gstApplied
       ? {
-          0: { cellWidth: 10, halign: 'center' },
+          0: { cellWidth: isA5 ? 8 : 10, halign: 'center' },
           1: { cellWidth: 'auto' },
-          2: { cellWidth: 16, halign: 'center' },
-          3: { cellWidth: 14, halign: 'right' },
-          4: { cellWidth: 14, halign: 'center' },
-          5: { cellWidth: 22, halign: 'right' },
-          6: { cellWidth: 16, halign: 'center' },
-          7: { cellWidth: 26, halign: 'right', fontStyle: 'bold' },
+          2: { cellWidth: isA5 ? 13 : 16, halign: 'center' },
+          3: { cellWidth: isA5 ? 10 : 14, halign: 'right' },
+          4: { cellWidth: isA5 ? 10 : 14, halign: 'center' },
+          5: { cellWidth: isA5 ? 16 : 22, halign: 'right' },
+          6: { cellWidth: isA5 ? 12 : 16, halign: 'center' },
+          7: { cellWidth: isA5 ? 18 : 26, halign: 'right', fontStyle: 'bold' },
         }
       : {
-          0: { cellWidth: 12, halign: 'center' },
+          0: { cellWidth: isA5 ? 9 : 12, halign: 'center' },
           1: { cellWidth: 'auto' },
-          2: { cellWidth: 18, halign: 'right' },
-          3: { cellWidth: 18, halign: 'center' },
-          4: { cellWidth: 28, halign: 'right' },
-          5: { cellWidth: 32, halign: 'right', fontStyle: 'bold' },
+          2: { cellWidth: isA5 ? 14 : 18, halign: 'right' },
+          3: { cellWidth: isA5 ? 13 : 18, halign: 'center' },
+          4: { cellWidth: isA5 ? 20 : 28, halign: 'right' },
+          5: { cellWidth: isA5 ? 24 : 32, halign: 'right', fontStyle: 'bold' },
         },
     margin: {
-      left: A4_PORTRAIT.marginLeft,
-      right: A4_PORTRAIT.marginRight,
-      top: 18,
-      bottom: 22,
+      left: marginX,
+      right: marginX,
+      top: isA5 ? 12 : 18,
+      bottom: isA5 ? 14 : 22,
     },
   });
 
-  const finalY = (doc as any).lastAutoTable?.finalY || currentY + 40;
-  let summaryY = finalY + 6;
+  const finalY = (doc as any).lastAutoTable?.finalY || currentY + 30;
+  let summaryY = finalY + (isA5 ? 4 : 6);
 
-  // Check if summary + signature blocks fit on current A4 page
-  // Needs ~55mm of vertical space
-  if (summaryY + 55 > pageHeight - A4_PORTRAIT.marginBottom) {
-    doc.addPage('a4', 'portrait');
-    summaryY = A4_PORTRAIT.marginTop;
+  // Check if summary + signature blocks fit on current page
+  if (summaryY + (isA5 ? 40 : 55) > pageHeight - (isA5 ? 14 : 20)) {
+    doc.addPage(isA5 ? 'a5' : 'a4', 'portrait');
+    summaryY = isA5 ? 12 : A4_PORTRAIT.marginTop;
   }
 
   // Financial Summary Block (Right Aligned)
-  const summaryBoxWidth = 76;
-  const summaryBoxX = pageWidth - 14 - summaryBoxWidth;
+  const summaryBoxWidth = isA5 ? 58 : 76;
+  const summaryBoxX = pageWidth - marginX - summaryBoxWidth;
 
   // Left side info: Payment Terms / Notes
-  doc.setFontSize(8.5);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(71, 85, 105);
-  doc.text('TERMS & CONDITIONS:', 14, summaryY);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(
-    settings.termsAndConditions ||
-      '1. Goods once sold will not be taken back without original bill.\n2. Warranty as per manufacturer terms & conditions only.\n3. Interest @18% p.a. charged on overdue credit bills.',
-    14,
-    summaryY + 4.5
-  );
+  if (settings.termsAndConditions || settings.footerMessage) {
+    doc.setFontSize(isA5 ? 6.5 : 7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 116, 139);
+    const noteText = settings.termsAndConditions || settings.footerMessage || '';
+    const noteLines = doc.splitTextToSize(noteText, pageWidth - marginX - summaryBoxWidth - (isA5 ? 6 : 10));
+    doc.text(noteLines, marginX, summaryY + 2);
+  }
 
   // Right side totals
   doc.setFontSize(8.5);
@@ -411,7 +480,7 @@ export function downloadInvoicePdf(invoice: Invoice, settings: ShopSettings): vo
     summaryY += 4;
 
     doc.text('SGST:', summaryBoxX, summaryY);
-    doc.text(formatCurrencyPdf(sgst), pageWidth - 14, summaryY, { align: 'right' });
+    doc.text(formatCurrencyPdf(sgst), pageWidth - marginX, summaryY, { align: 'right' });
     summaryY += 4.5;
   }
 
@@ -419,39 +488,40 @@ export function downloadInvoicePdf(invoice: Invoice, settings: ShopSettings): vo
   doc.setFillColor(241, 245, 249);
   doc.roundedRect(summaryBoxX - 2, summaryY - 3.5, summaryBoxWidth + 2, 8, 1, 1, 'F');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10.5);
+  doc.setFontSize(isA5 ? 9.5 : 10.5);
   doc.setTextColor(15, 23, 42);
   doc.text('Grand Total:', summaryBoxX, summaryY + 2);
-  doc.text(formatCurrencyPdf(invoice.grandTotal), pageWidth - 14, summaryY + 2, { align: 'right' });
+  doc.text(formatCurrencyPdf(invoice.grandTotal), pageWidth - marginX, summaryY + 2, { align: 'right' });
 
   summaryY += 15;
 
   // Signatory Stamp Section (Always guaranteed on the last page)
   let sigY = summaryY;
-  if (sigY + 22 > pageHeight - A4_PORTRAIT.marginBottom) {
-    doc.addPage('a4', 'portrait');
-    sigY = A4_PORTRAIT.marginTop + 4;
+  if (sigY + 22 > pageHeight - (isA5 ? 14 : A4_PORTRAIT.marginBottom)) {
+    doc.addPage(isA5 ? 'a5' : 'a4', 'portrait');
+    sigY = isA5 ? 14 : (A4_PORTRAIT.marginTop + 4);
   }
 
+  const sigWidth = isA5 ? 45 : 55;
   doc.setDrawColor(203, 213, 225);
-  doc.line(pageWidth - 14 - 55, sigY + 12, pageWidth - 14, sigY + 12);
+  doc.line(pageWidth - marginX - sigWidth, sigY + 12, pageWidth - marginX, sigY + 12);
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
+  doc.setFontSize(isA5 ? 7.5 : 8);
   doc.setTextColor(51, 65, 85);
-  doc.text(`For ${settings.shopName || 'Store'}`, pageWidth - 14 - 27.5, sigY + 8, {
+  doc.text(`For ${settings.shopName || 'Store'}`, pageWidth - marginX - (sigWidth / 2), sigY + 8, {
     align: 'center',
   });
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(isA5 ? 7 : 7.5);
   doc.setTextColor(148, 163, 184);
-  doc.text('Authorized Signatory', pageWidth - 14 - 27.5, sigY + 16, { align: 'center' });
+  doc.text('Authorized Signatory', pageWidth - marginX - (sigWidth / 2), sigY + 16, { align: 'center' });
 
-  // Add standard A4 footer & page numbers
-  addA4PageFooters(doc, `Invoice #${invoice.invoiceNumber}`, 'portrait');
+  // Add standard footer & page numbers
+  addA4PageFooters(doc, `Invoice #${invoice.invoiceNumber} (${isA5 ? 'A5' : 'A4'})`, 'portrait');
 
   // Trigger browser download
-  doc.save(`${invoice.invoiceNumber}_A4.pdf`);
+  doc.save(`${invoice.invoiceNumber}_${isA5 ? 'A5' : 'A4'}.pdf`);
 }
 
 /**
@@ -461,7 +531,8 @@ export function downloadInvoicePdf(invoice: Invoice, settings: ShopSettings): vo
 export function downloadSalesHistoryPdf(
   invoices: Invoice[],
   settings: ShopSettings,
-  filterDescription?: string
+  filterDescription?: string,
+  products?: Product[]
 ): void {
   const doc = new jsPDF({
     orientation: 'landscape',
@@ -471,53 +542,41 @@ export function downloadSalesHistoryPdf(
 
   const pageWidth = doc.internal.pageSize.getWidth(); // 297mm
 
-  // Top-Left Corner Official Logo (Properly sized and straight to shop name)
-  const historyLogoHeight = 14;
-  const historyLogoX = 14;
-  const historyLogoY = 11.2;
-  const historyLogoDim = drawTopLeftLogo(doc, historyLogoX, historyLogoY, historyLogoHeight, settings);
-
-  const brandX = historyLogoX + historyLogoDim.width + 3.5;
-
-  // Title Header straight to the logo
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14.5);
-  doc.setTextColor(15, 23, 42);
-  const displayName = settings.shopName || 'Sri Senthur Velan Electricals and Pipes';
-  doc.text(displayName, brandX, 15.5);
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(234, 88, 12); // orange-600
-  doc.text('SALES & INVOICES HISTORY REPORT (A4 FORMAT)', brandX, 20.5);
-
-  if (settings.phone || settings.gstin) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(100, 116, 139);
-    doc.text(
-      [settings.phone ? `Ph: +91 ${settings.phone}` : '', settings.gstin ? `GSTIN: ${settings.gstin}` : '']
-        .filter(Boolean)
-        .join('  |  '),
-      brandX,
-      25
-    );
-  }
-
-  const metaRightX = pageWidth - 14;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  const nowStr = new Date().toLocaleString('en-IN');
-  doc.text(`Generated on: ${nowStr}`, metaRightX, 15.5, { align: 'right' });
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(71, 85, 105);
-  doc.text(filterDescription || `Total Invoices: ${invoices.length}`, metaRightX, 21, {
-    align: 'right',
+  // Map of productId / name to purchasePrice / costPrice
+  const productCostMap = new Map<string, number>();
+  products?.forEach((p) => {
+    const cost = p.purchasePrice ?? (p as any).costPrice ?? 0;
+    productCostMap.set(p.productId, cost);
+    if (p.name) {
+      productCostMap.set(p.name.toLowerCase().trim(), cost);
+    }
   });
-  let currentY = 32;
+
+  const getItemCostPrice = (item: any): number => {
+    if (typeof item.purchasePrice === 'number' && item.purchasePrice >= 0) return item.purchasePrice;
+    if (typeof item.costPrice === 'number' && item.costPrice >= 0) return item.costPrice;
+    if (item.productId && productCostMap.has(item.productId)) return productCostMap.get(item.productId) || 0;
+    if (item.productNameSnapshot) {
+      const key = item.productNameSnapshot.toLowerCase().trim();
+      if (productCostMap.has(key)) return productCostMap.get(key) || 0;
+    }
+    return 0;
+  };
+
+  const nowStr = new Date().toLocaleString('en-IN');
+  let currentY = drawStandardReportHeader({
+    doc,
+    settings,
+    reportTitle: 'SALES & INVOICES HISTORY REPORT (A4 FORMAT)',
+    rightMetaLines: [
+      `Generated on: ${nowStr}`,
+      filterDescription || `Total Invoices: ${invoices.length}`,
+    ],
+    startY: 11.2,
+    logoHeight: 14,
+  });
+
+  currentY = Math.max(currentY, 32);
 
   // Financial Metrics Summary Bar
   const totalRevenue = invoices.reduce((sum, inv) => sum + inv.grandTotal, 0);
@@ -525,14 +584,21 @@ export function downloadSalesHistoryPdf(
   const totalTaxable = totalRevenue - totalGst;
   const pendingCreditInvoices = invoices.filter((i) => i.paymentMethod === 'credit' && !i.creditPaid);
   const pendingCreditTotal = pendingCreditInvoices.reduce((sum, inv) => sum + inv.grandTotal, 0);
+  const totalProfit = invoices.reduce((sum, inv) => {
+    const gross = inv.subtotal || (inv.grandTotal - (inv.gstAmount || 0));
+    const disc = getInvoiceDiscount(inv);
+    const tax = Math.max(0, gross - disc);
+    const cogs = inv.items.reduce((s, it) => s + getItemCostPrice(it) * it.quantity, 0);
+    return sum + (tax - cogs);
+  }, 0);
 
   // Background box for summary
   doc.setFillColor(248, 250, 252);
   doc.roundedRect(14, currentY, pageWidth - 28, 12, 1.5, 1.5, 'F');
-  doc.setFontSize(8.5);
+  doc.setFontSize(8);
 
-  const cardW = (pageWidth - 28) / 4;
-  // Metric 1
+  const cardW = (pageWidth - 28) / 5;
+  // Metric 1: Total Bills
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.text('Total Invoices', 18, currentY + 4.5);
@@ -540,7 +606,7 @@ export function downloadSalesHistoryPdf(
   doc.setTextColor(15, 23, 42);
   doc.text(`${invoices.length} Bills`, 18, currentY + 9.5);
 
-  // Metric 2
+  // Metric 2: Taxable Value
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.text('Taxable Value', 18 + cardW, currentY + 4.5);
@@ -548,7 +614,7 @@ export function downloadSalesHistoryPdf(
   doc.setTextColor(15, 23, 42);
   doc.text(formatCurrencyPdf(totalTaxable), 18 + cardW, currentY + 9.5);
 
-  // Metric 3
+  // Metric 3: GST Collected
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.text('GST Collected', 18 + cardW * 2, currentY + 4.5);
@@ -556,7 +622,7 @@ export function downloadSalesHistoryPdf(
   doc.setTextColor(15, 23, 42);
   doc.text(formatCurrencyPdf(totalGst), 18 + cardW * 2, currentY + 9.5);
 
-  // Metric 4
+  // Metric 4: Grand Sales Total
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.text('Grand Sales Total', 18 + cardW * 3, currentY + 4.5);
@@ -564,9 +630,21 @@ export function downloadSalesHistoryPdf(
   doc.setTextColor(15, 23, 42);
   doc.text(formatCurrencyPdf(totalRevenue), 18 + cardW * 3, currentY + 9.5);
 
+  // Metric 5: Total Profit
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(5, 150, 105); // emerald-600
+  doc.text('Total Profit', 18 + cardW * 4, currentY + 4.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(4, 120, 87); // emerald-700
+  doc.text(
+    totalProfit >= 0 ? `+${formatCurrencyPdf(totalProfit)}` : `-${formatCurrencyPdf(Math.abs(totalProfit))}`,
+    18 + cardW * 4,
+    currentY + 9.5
+  );
+
   currentY += 16;
 
-  // Table of Invoices (exactly sums to 269mm content width)
+  // Table of Invoices (sums to 269mm content width)
   const tableHeaders = [
     '#',
     'Invoice No',
@@ -576,11 +654,16 @@ export function downloadSalesHistoryPdf(
     'Taxable',
     'GST',
     'Grand Total',
+    'Profit',
     'Status',
   ];
 
   const tableBody = invoices.map((inv, idx) => {
-    const taxable = Math.max(0, inv.grandTotal - (inv.gstAmount || 0));
+    const gross = inv.subtotal || (inv.grandTotal - (inv.gstAmount || 0));
+    const disc = getInvoiceDiscount(inv);
+    const taxable = Math.max(0, gross - disc);
+    const cogs = inv.items.reduce((s, it) => s + getItemCostPrice(it) * it.quantity, 0);
+    const profit = taxable - cogs;
     const isCredit = inv.paymentMethod === 'credit';
     let statusText = 'Completed';
     if (isCredit) {
@@ -604,6 +687,7 @@ export function downloadSalesHistoryPdf(
       formatCurrencyPdf(taxable),
       formatCurrencyPdf(inv.gstAmount || 0),
       formatCurrencyPdf(inv.grandTotal),
+      profit >= 0 ? `+${formatCurrencyPdf(profit)}` : `-${formatCurrencyPdf(Math.abs(profit))}`,
       statusText,
     ];
   });
@@ -630,15 +714,16 @@ export function downloadSalesHistoryPdf(
       fillColor: [248, 250, 252],
     },
     columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
+      0: { cellWidth: 8, halign: 'center' },
       1: { cellWidth: 26, fontStyle: 'bold' },
-      2: { cellWidth: 32 },
-      3: { cellWidth: 58 },
-      4: { cellWidth: 25, halign: 'center' },
-      5: { cellWidth: 26, halign: 'right' },
-      6: { cellWidth: 24, halign: 'right' },
-      7: { cellWidth: 30, halign: 'right', fontStyle: 'bold' },
-      8: { cellWidth: 38, halign: 'center' },
+      2: { cellWidth: 30 },
+      3: { cellWidth: 50 },
+      4: { cellWidth: 24, halign: 'center' },
+      5: { cellWidth: 24, halign: 'right' },
+      6: { cellWidth: 22, halign: 'right' },
+      7: { cellWidth: 27, halign: 'right', fontStyle: 'bold' },
+      8: { cellWidth: 28, halign: 'right', fontStyle: 'bold', textColor: [4, 120, 87] },
+      9: { cellWidth: 30, halign: 'center' },
     },
     margin: {
       left: A4_LANDSCAPE.marginLeft,
@@ -677,13 +762,16 @@ export function downloadAnalyticsReportPdf(
     period: 'daily' | 'monthly' | 'yearly';
     selectedPeriodLabel: string;
     totalRevenue: number;
+    totalProfit?: number;
+    totalCost?: number;
+    profitMargin?: number;
     totalBills: number;
     totalDiscount?: number;
     totalGst: number;
     totalUnitsSold: number;
     avgBillValue: number;
     paymentBreakdown: Record<string, number>;
-    topItems: Array<{ name: string; qty: number; total: number; unit: string }>;
+    topItems: Array<{ name: string; qty: number; total: number; unit: string; profit?: number; margin?: number }>;
     invoices: Invoice[];
   },
   settings: ShopSettings
@@ -697,54 +785,20 @@ export function downloadAnalyticsReportPdf(
   const pageWidth = doc.internal.pageSize.getWidth(); // 210mm
   const pageHeight = doc.internal.pageSize.getHeight(); // 297mm
 
-  // Top-Left Corner Official Logo (Properly sized and straight to shop name)
-  const analyticsLogoHeight = 14;
-  const analyticsLogoX = 14;
-  const analyticsLogoY = 11.2;
-  const analyticsLogoDim = drawTopLeftLogo(doc, analyticsLogoX, analyticsLogoY, analyticsLogoHeight, settings);
-
-  const brandX = analyticsLogoX + analyticsLogoDim.width + 3.5;
-
-  // Header straight to the logo
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14.5);
-  doc.setTextColor(15, 23, 42);
-  const displayName = settings.shopName || 'Sri Senthur Velan Electricals and Pipes';
-  doc.text(displayName, brandX, 15.5);
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(234, 88, 12);
-  doc.text(
-    `BUSINESS PERFORMANCE & SALES REPORT (${data.selectedPeriodLabel.toUpperCase()})`,
-    brandX,
-    20.5
-  );
-
-  if (settings.phone || settings.gstin) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(100, 116, 139);
-    doc.text(
-      [settings.phone ? `Ph: +91 ${settings.phone}` : '', settings.gstin ? `GSTIN: ${settings.gstin}` : '']
-        .filter(Boolean)
-        .join('  |  '),
-      brandX,
-      25
-    );
-  }
-
-  const analyticsRightX = pageWidth - 14;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, analyticsRightX, 15.5, {
-    align: 'right',
+  const nowStr = new Date().toLocaleString('en-IN');
+  let currentY = drawStandardReportHeader({
+    doc,
+    settings,
+    reportTitle: `BUSINESS PERFORMANCE & SALES REPORT (${data.selectedPeriodLabel.toUpperCase()})`,
+    rightMetaLines: [`Generated: ${nowStr}`],
+    startY: 11.2,
+    logoHeight: 14,
   });
-  let currentY = 32;
 
-  // Row 1: 3 Metric Cards (Total Revenue, Invoices, Total Discount)
-  const cardWidth3 = (A4_PORTRAIT.contentWidth - 8) / 3; // 58mm each
+  currentY = Math.max(currentY, 32);
+
+  // Row 1: 3 Metric Cards (Total Revenue, Gross Profit, Invoices)
+  const cardWidth3 = (A4_PORTRAIT.contentWidth - 8) / 3; // ~58mm each
   const cardHeight = 15;
 
   // Card 1: Total Revenue
@@ -759,66 +813,79 @@ export function downloadAnalyticsReportPdf(
   doc.setTextColor(120, 53, 15);
   doc.text(formatCurrencyPdf(data.totalRevenue), 17, currentY + 11.5);
 
-  // Card 2: Total Invoices & Avg Value
+  // Card 2: Gross Profit & Margin
   const card2X = 14 + cardWidth3 + 4;
-  doc.setFillColor(241, 245, 249); // slate-100
+  const profitVal = data.totalProfit ?? 0;
+  const marginStr = typeof data.profitMargin === 'number' ? ` (${data.profitMargin.toFixed(1)}%)` : '';
+  doc.setFillColor(220, 252, 231); // emerald-100
   doc.roundedRect(card2X, currentY, cardWidth3, cardHeight, 1.5, 1.5, 'F');
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.setTextColor(71, 85, 105);
-  doc.text('INVOICES / AVG TICKET', card2X + 3, currentY + 5);
+  doc.setTextColor(21, 128, 61); // emerald-700
+  doc.text(`GROSS PROFIT${marginStr}`, card2X + 3, currentY + 5);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10.5);
-  doc.setTextColor(15, 23, 42);
-  doc.text(
-    `${data.totalBills} Bills (${formatCurrencyPdf(data.avgBillValue)})`,
-    card2X + 3,
-    currentY + 11.5
-  );
+  doc.setFontSize(11);
+  doc.setTextColor(20, 83, 45); // emerald-900
+  doc.text(formatCurrencyPdf(profitVal), card2X + 3, currentY + 11.5);
 
-  // Card 3: Total Discount Given
+  // Card 3: Total Invoices & Avg Value
   const card3X = card2X + cardWidth3 + 4;
-  const discountVal = data.totalDiscount || 0;
-  doc.setFillColor(255, 237, 213); // orange-100
+  doc.setFillColor(241, 245, 249); // slate-100
   doc.roundedRect(card3X, currentY, cardWidth3, cardHeight, 1.5, 1.5, 'F');
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.setTextColor(194, 65, 12); // orange-700
-  doc.text('TOTAL DISCOUNT GIVEN', card3X + 3, currentY + 5);
+  doc.setTextColor(71, 85, 105);
+  doc.text('INVOICES / AVG TICKET', card3X + 3, currentY + 5);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(154, 52, 18);
-  doc.text(`-${formatCurrencyPdf(discountVal)}`, card3X + 3, currentY + 11.5);
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text(
+    `${data.totalBills} Bills (${formatCurrencyPdf(data.avgBillValue)})`,
+    card3X + 3,
+    currentY + 11.5
+  );
 
   currentY += cardHeight + 3.5;
 
-  // Row 2: 2 Metric Cards (GST Tax Collected, Total Units Sold)
-  const cardWidth2 = (A4_PORTRAIT.contentWidth - 6) / 2; // 88mm
-
-  // Card 4: GST Collected
-  doc.setFillColor(236, 253, 245); // emerald-50
-  doc.roundedRect(14, currentY, cardWidth2, cardHeight, 1.5, 1.5, 'F');
+  // Row 2: 3 Metric Cards (Total Discount, GST Collected, Total Units Sold)
+  // Card 4: Total Discount Given
+  const discountVal = data.totalDiscount || 0;
+  doc.setFillColor(255, 237, 213); // orange-100
+  doc.roundedRect(14, currentY, cardWidth3, cardHeight, 1.5, 1.5, 'F');
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.setTextColor(6, 95, 70); // emerald-800
-  doc.text('GST TAX COLLECTED', 17, currentY + 5);
+  doc.setTextColor(194, 65, 12); // orange-700
+  doc.text('TOTAL DISCOUNT GIVEN', 17, currentY + 5);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
-  doc.setTextColor(6, 78, 59);
-  doc.text(formatCurrencyPdf(data.totalGst), 17, currentY + 11.5);
+  doc.setTextColor(154, 52, 18);
+  doc.text(`-${formatCurrencyPdf(discountVal)}`, 17, currentY + 11.5);
 
-  // Card 5: Total Units Sold
-  const card5X = 14 + cardWidth2 + 6;
+  // Card 5: GST Collected
+  const card5X = 14 + cardWidth3 + 4;
+  doc.setFillColor(238, 242, 255); // indigo-50
+  doc.roundedRect(card5X, currentY, cardWidth3, cardHeight, 1.5, 1.5, 'F');
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(67, 56, 202); // indigo-700
+  doc.text('GST TAX COLLECTED', card5X + 3, currentY + 5);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(49, 46, 129);
+  doc.text(formatCurrencyPdf(data.totalGst), card5X + 3, currentY + 11.5);
+
+  // Card 6: Total Units Sold
+  const card6X = card5X + cardWidth3 + 4;
   doc.setFillColor(241, 245, 249);
-  doc.roundedRect(card5X, currentY, cardWidth2, cardHeight, 1.5, 1.5, 'F');
+  doc.roundedRect(card6X, currentY, cardWidth3, cardHeight, 1.5, 1.5, 'F');
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(71, 85, 105);
-  doc.text('TOTAL QUANTITY UNITS SOLD', card5X + 3, currentY + 5);
+  doc.text('TOTAL QUANTITY SOLD', card6X + 3, currentY + 5);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(15, 23, 42);
-  doc.text(`${data.totalUnitsSold} Units Dispensed`, card5X + 3, currentY + 11.5);
+  doc.text(`${data.totalUnitsSold} Units Sold`, card6X + 3, currentY + 11.5);
 
   currentY += cardHeight + 8;
 
@@ -1073,47 +1140,17 @@ export function downloadCustomerLedgerPdf(
 
   const pageWidth = doc.internal.pageSize.getWidth();
 
-  // Top-Left Corner Official Logo (Properly sized and straight to shop name)
-  const custLogoHeight = 14;
-  const custLogoX = 14;
-  const custLogoY = 11.2;
-  const custLogoDim = drawTopLeftLogo(doc, custLogoX, custLogoY, custLogoHeight, settings);
-
-  const brandX = custLogoX + custLogoDim.width + 3.5;
-
-  // Header straight to the logo
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14.5);
-  doc.setTextColor(15, 23, 42);
-  const displayName = settings.shopName || 'Sri Senthur Velan Electricals and Pipes';
-  doc.text(displayName, brandX, 15.5);
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(234, 88, 12);
-  doc.text('CUSTOMER STATEMENT OF ACCOUNT & CREDIT LEDGER (A4)', brandX, 20.5);
-
-  if (settings.phone || settings.gstin) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(100, 116, 139);
-    doc.text(
-      [settings.phone ? `Ph: +91 ${settings.phone}` : '', settings.gstin ? `GSTIN: ${settings.gstin}` : '']
-        .filter(Boolean)
-        .join('  |  '),
-      brandX,
-      25
-    );
-  }
-
-  const custRightX = pageWidth - 14;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, custRightX, 15.5, {
-    align: 'right',
+  const nowStr = new Date().toLocaleString('en-IN');
+  let currentY = drawStandardReportHeader({
+    doc,
+    settings,
+    reportTitle: 'CUSTOMER STATEMENT OF ACCOUNT & CREDIT LEDGER (A4)',
+    rightMetaLines: [`Generated: ${nowStr}`],
+    startY: 11.2,
+    logoHeight: 14,
   });
-  let currentY = 32;
+
+  currentY = Math.max(currentY, 32);
 
   // Customer Details & Balance Box
   doc.setFillColor(248, 250, 252);
@@ -1225,47 +1262,17 @@ export function downloadSupplierLedgerPdf(
 
   const pageWidth = doc.internal.pageSize.getWidth();
 
-  // Top-Left Corner Official Logo
-  const supLogoHeight = 14;
-  const supLogoX = 14;
-  const supLogoY = 11.2;
-  const supLogoDim = drawTopLeftLogo(doc, supLogoX, supLogoY, supLogoHeight, settings);
-
-  const brandX = supLogoX + supLogoDim.width + 3.5;
-
-  // Header straight to the logo
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14.5);
-  doc.setTextColor(15, 23, 42);
-  const displayName = settings.shopName || 'Sri Senthur Velan Electricals and Pipes';
-  doc.text(displayName, brandX, 15.5);
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(234, 88, 12);
-  doc.text('SUPPLIER STATEMENT OF ACCOUNT & PAYABLES LEDGER (A4)', brandX, 20.5);
-
-  if (settings.phone || settings.gstin) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(100, 116, 139);
-    doc.text(
-      [settings.phone ? `Ph: +91 ${settings.phone}` : '', settings.gstin ? `GSTIN: ${settings.gstin}` : '']
-        .filter(Boolean)
-        .join('  |  '),
-      brandX,
-      25
-    );
-  }
-
-  const supRightX = pageWidth - 14;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, supRightX, 15.5, {
-    align: 'right',
+  const nowStr = new Date().toLocaleString('en-IN');
+  let currentY = drawStandardReportHeader({
+    doc,
+    settings,
+    reportTitle: 'SUPPLIER STATEMENT OF ACCOUNT & PAYABLES LEDGER (A4)',
+    rightMetaLines: [`Generated: ${nowStr}`],
+    startY: 11.2,
+    logoHeight: 14,
   });
-  let currentY = 32;
+
+  currentY = Math.max(currentY, 32);
 
   // Supplier Details & Balance Box
   doc.setFillColor(248, 250, 252);
@@ -1387,55 +1394,21 @@ export function downloadInventoryStockPdf(
 
   const pageWidth = doc.internal.pageSize.getWidth();
 
-  // Top-Left Corner Official Logo (Properly sized and straight to shop name)
-  const stockLogoHeight = 14;
-  const stockLogoX = 14;
-  const stockLogoY = 11.2;
-  const stockLogoDim = drawTopLeftLogo(doc, stockLogoX, stockLogoY, stockLogoHeight, settings);
-
-  const brandX = stockLogoX + stockLogoDim.width + 3.5;
-
-  // Header straight to the logo
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14.5);
-  doc.setTextColor(15, 23, 42);
-  const displayName = settings.shopName || 'Sri Senthur Velan Electricals and Pipes';
-  doc.text(displayName, brandX, 15.5);
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(234, 88, 12);
-  doc.text('INVENTORY STOCK & VALUATION AUDIT REPORT (A4)', brandX, 20.5);
-
-  if (settings.phone || settings.gstin) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(100, 116, 139);
-    doc.text(
-      [settings.phone ? `Ph: +91 ${settings.phone}` : '', settings.gstin ? `GSTIN: ${settings.gstin}` : '']
-        .filter(Boolean)
-        .join('  |  '),
-      brandX,
-      25
-    );
-  }
-
-  const stockRightX = pageWidth - 14;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, stockRightX, 15.5, {
-    align: 'right',
+  const nowStr = new Date().toLocaleString('en-IN');
+  let currentY = drawStandardReportHeader({
+    doc,
+    settings,
+    reportTitle: 'INVENTORY STOCK & VALUATION AUDIT REPORT (A4)',
+    reportSubtitle: filterDescription,
+    rightMetaLines: [
+      `Generated: ${nowStr}`,
+      filterDescription || `Total Products: ${products.length}`,
+    ],
+    startY: 11.2,
+    logoHeight: 14,
   });
-  let currentY = 32;
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(71, 85, 105);
-  doc.text(filterDescription || `Total Products: ${products.length}`, stockRightX, currentY, {
-    align: 'right',
-  });
-  currentY += 7;
+  currentY = Math.max(currentY, 32);
 
   // Valuation Calculation
   const totalStockQty = products.reduce((sum, p) => sum + p.stockQty, 0);

@@ -18,6 +18,13 @@ import {
   Eye,
   EyeOff,
   UserPlus,
+  Keyboard,
+  Search,
+  Banknote,
+  Smartphone,
+  CreditCard,
+  ShoppingCart,
+  Pause,
 } from 'lucide-react';
 import { ShopSettings, ThermalWidth, AdminUser } from '../types';
 import { getShopLogoUrl } from '../utils/formatters';
@@ -498,7 +505,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <div>
-              <label className="font-semibold text-zinc-700 block mb-1">Contact Name</label>
+              <label className="font-semibold text-zinc-700 block mb-1">Contact / Owner Name</label>
               <input
                 type="text"
                 value={formData.ownerName}
@@ -508,19 +515,48 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <div>
-              <label className="font-semibold text-zinc-700 block mb-1">Phone / WhatsApp *</label>
+              <label className="font-semibold text-zinc-700 block mb-1">
+                Primary Phone / Mobile * <span className="text-[11px] text-orange-600 font-semibold">(Printed on Bill)</span>
+              </label>
               <input
                 type="text"
                 required
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                placeholder="e.g. 98450 12345"
+                className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg font-medium focus:outline-none focus:border-orange-500"
+              />
+            </div>
+
+            <div>
+              <label className="font-semibold text-zinc-700 block mb-1">
+                Alternate / Secondary Phone <span className="text-[11px] text-orange-600 font-semibold">(Printed on Bill)</span>
+              </label>
+              <input
+                type="text"
+                value={formData.alternatePhone || ''}
+                onChange={(e) => setFormData({ ...formData, alternatePhone: e.target.value })}
+                placeholder="e.g. 94430 67890"
+                className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg font-medium focus:outline-none focus:border-orange-500"
+              />
+            </div>
+
+            <div>
+              <label className="font-semibold text-zinc-700 block mb-1">
+                Store Email Address <span className="text-[11px] text-orange-600 font-semibold">(Printed on Bill)</span>
+              </label>
+              <input
+                type="email"
+                value={formData.email || ''}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                placeholder="e.g. ivar.chandru@gmail.com"
                 className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg font-medium focus:outline-none focus:border-orange-500"
               />
             </div>
 
             <div className="sm:col-span-2">
               <label htmlFor="setting-shop-address" className="font-semibold text-zinc-700 block mb-1">
-                Shop Address (Street, Area, Landmark)
+                Shop Address (Street, Area, Landmark) <span className="text-[11px] text-orange-600 font-semibold">(Printed on Bill)</span>
               </label>
               <textarea
                 id="setting-shop-address"
@@ -531,7 +567,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg font-medium text-zinc-900 focus:outline-none focus:border-orange-500"
               />
               <span className="text-[11px] text-zinc-400 mt-0.5 block">
-                This address will be printed at the top of your invoices, bills, thermal receipts, and reports.
+                This exact address, city, state, and pincode will be printed at the top of your bills and invoices.
               </span>
             </div>
 
@@ -572,25 +608,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <div>
-              <label htmlFor="setting-shop-gstin" className="font-semibold text-zinc-700 block mb-1">GSTIN</label>
+              <label htmlFor="setting-shop-gstin" className="font-semibold text-zinc-700 block mb-1">
+                GSTIN Registration <span className="text-[11px] text-orange-600 font-semibold">(Printed on Bill)</span>
+              </label>
               <input
                 id="setting-shop-gstin"
                 type="text"
                 value={formData.gstin}
-                onChange={(e) => setFormData({ ...formData, gstin: e.target.value })}
+                onChange={(e) => setFormData({ ...formData, gstin: e.target.value.toUpperCase() })}
                 placeholder="e.g. 33ABCDE1234F1Z5"
-                className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg font-mono font-medium focus:outline-none focus:border-orange-500"
+                className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg font-mono font-medium focus:outline-none focus:border-orange-500 uppercase"
               />
             </div>
           </div>
         </div>
 
-        {/* GST DEFAULTS */}
+        {/* BILL MODE & FOOTER NOTES */}
         <div className="bg-white rounded-xl p-5 shadow-xs border border-zinc-200 space-y-4">
           <div className="flex items-center gap-2 pb-3 border-b border-zinc-100">
             <Receipt className="w-4 h-4 text-orange-500" />
             <h2 className="text-sm font-bold text-zinc-950">
-              GST Defaults & Bill Footer
+              Bill Mode & Footer Notes
             </h2>
           </div>
 
@@ -613,22 +651,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               >
                 {formData.defaultGstOn ? 'Default: GST Bill' : 'Default: Cash Memo'}
               </button>
-            </div>
-
-            <div>
-              <label className="font-semibold text-zinc-700 block mb-1">Default GST Rate (%)</label>
-              <select
-                value={formData.defaultGstRate}
-                onChange={(e) =>
-                  setFormData({ ...formData, defaultGstRate: parseInt(e.target.value, 10) || 18 })
-                }
-                className="w-full sm:w-60 px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg font-medium focus:outline-none focus:border-orange-500"
-              >
-                <option value={18}>18% (Standard Electrical Goods)</option>
-                <option value={12}>12% (Lighting & LED items)</option>
-                <option value={28}>28% (Heavy Appliances)</option>
-                <option value={5}>5%</option>
-              </select>
             </div>
 
             <div>
@@ -823,7 +845,172 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* SAVE & RESET ACTIONS */}
+        {/* POS KEYBOARD SHORTCUTS & HOTKEYS GUIDE */}
+        <div className="bg-white rounded-xl p-5 shadow-xs border border-zinc-200 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-zinc-100 gap-2">
+            <div className="flex items-center gap-2">
+              <Keyboard className="w-4 h-4 text-orange-500" />
+              <h2 className="text-sm font-bold text-zinc-950">
+                POS Keyboard Shortcuts & Hotkeys Guide
+              </h2>
+            </div>
+            <span className="text-[11px] font-medium text-zinc-400 bg-zinc-50 border border-zinc-200/80 px-2 py-0.5 rounded-lg w-fit">
+              Shortcuts are also labeled directly on each POS button
+            </span>
+          </div>
+
+          <p className="text-xs text-zinc-500 leading-relaxed">
+            Speed-billing operations can be completed entirely from your keyboard without using a mouse. 
+            All shortcut keys are also visually printed directly on their respective buttons in the POS billing screen for rapid daily reference.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+            {/* Group 1: Product Search & Cart */}
+            <div className="bg-zinc-50/70 border border-zinc-200/80 rounded-xl p-3.5 space-y-2.5">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-zinc-800 border-b border-zinc-200/60 pb-2">
+                <Search className="w-3.5 h-3.5 text-orange-500" />
+                <span>Search Catalog & Cart Line Items</span>
+              </div>
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Focus Product Search</span>
+                  <div className="flex items-center gap-1">
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">F2</kbd>
+                    <span className="text-zinc-400 text-[10px]">or</span>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Ctrl+F</kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Navigate Search Results</span>
+                  <div className="flex items-center gap-1">
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">↑</kbd>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">↓</kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Add to Bill & Set Quantity</span>
+                  <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">↵ Enter</kbd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Jump to Cart Line Items (Qty)</span>
+                  <div className="flex items-center gap-1">
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">F3</kbd>
+                    <span className="text-zinc-400 text-[10px]">or</span>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Alt+C</kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Remove Line Item from Cart</span>
+                  <kbd className="px-1.5 py-0.5 rounded bg-white text-rose-700 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Alt+Del</kbd>
+                </div>
+              </div>
+            </div>
+
+            {/* Group 2: Customer & Payment Methods */}
+            <div className="bg-zinc-50/70 border border-zinc-200/80 rounded-xl p-3.5 space-y-2.5">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-zinc-800 border-b border-zinc-200/60 pb-2">
+                <User className="w-3.5 h-3.5 text-orange-500" />
+                <span>Customer & Payment Methods</span>
+              </div>
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Focus Customer Mobile / Details</span>
+                  <div className="flex items-center gap-1">
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">F4</kbd>
+                    <span className="text-zinc-400 text-[10px]">or</span>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Alt+K</kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Cash Payment Mode</span>
+                  <div className="flex items-center gap-1">
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-emerald-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">F7</kbd>
+                    <span className="text-zinc-400 text-[10px]">or</span>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Alt+1</kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">UPI / QR Payment Mode</span>
+                  <div className="flex items-center gap-1">
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-sky-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">F8</kbd>
+                    <span className="text-zinc-400 text-[10px]">or</span>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Alt+2</kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Card / POS Swipe Mode</span>
+                  <div className="flex items-center gap-1">
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-indigo-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">F9</kbd>
+                    <span className="text-zinc-400 text-[10px]">or</span>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Alt+3</kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Credit / Udhaar Ledger</span>
+                  <kbd className="px-1.5 py-0.5 rounded bg-white text-amber-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">F10</kbd>
+                </div>
+              </div>
+            </div>
+
+            {/* Group 3: Cash Tendered & Discount Flow */}
+            <div className="bg-zinc-50/70 border border-zinc-200/80 rounded-xl p-3.5 space-y-2.5">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-zinc-800 border-b border-zinc-200/60 pb-2">
+                <Banknote className="w-3.5 h-3.5 text-orange-500" />
+                <span>Cash Tendered & Discount Fast Flow</span>
+              </div>
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Cash Tendered ➔ Discount</span>
+                  <div className="flex items-center gap-1">
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">↵ Enter</kbd>
+                    <span className="text-[10px] text-zinc-400">(auto selects discount)</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Jump Directly to Discount</span>
+                  <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Alt+D</kbd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Confirm Discount & Return to Search</span>
+                  <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">↵ Enter</kbd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">A4 (max 25) / A5 (max 15) Paper Toggle</span>
+                  <div className="flex items-center gap-1">
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Alt+4</kbd>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Alt+5</kbd>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Group 4: Bill Finalization & Speed Actions */}
+            <div className="bg-zinc-50/70 border border-zinc-200/80 rounded-xl p-3.5 space-y-2.5">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-zinc-800 border-b border-zinc-200/60 pb-2">
+                <Printer className="w-3.5 h-3.5 text-orange-500" />
+                <span>Bill Finalization & Speed Actions</span>
+              </div>
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600 font-semibold">Print Bill & Record Sale</span>
+                  <kbd className="px-2 py-0.5 rounded bg-emerald-600 text-white font-mono font-bold text-[11px] shadow-2xs">Ctrl+Enter</kbd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Hold Bill & Open Blank (Next Cust.)</span>
+                  <kbd className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 font-mono font-bold text-[11px] shadow-2xs">F6</kbd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Open Quick Cheat Sheet Guide</span>
+                  <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">F1</kbd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Dismiss Overlays / Clear Search</span>
+                  <kbd className="px-1.5 py-0.5 rounded bg-white text-zinc-800 font-mono font-bold text-[11px] border border-zinc-300 shadow-2xs">Esc</kbd>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2">
           <button
             type="button"

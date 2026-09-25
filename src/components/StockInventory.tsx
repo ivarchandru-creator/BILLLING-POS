@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Package,
   Plus,
@@ -46,7 +46,9 @@ interface StockInventoryProps {
   stockTransactions: StockTransaction[];
   settings: ShopSettings;
   categories?: string[];
+  initialStockFilter?: 'all' | 'low';
   onSaveProduct: (product: Product) => void;
+  onDeleteProduct?: (productId: string) => void;
   onUpdateStock: (
     productId: string,
     quantityChange: number,
@@ -73,7 +75,9 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
   stockTransactions,
   settings,
   categories,
+  initialStockFilter,
   onSaveProduct,
+  onDeleteProduct,
   onUpdateStock,
   onBulkImportProducts,
   onAddCategory,
@@ -84,8 +88,15 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All Items');
   const [supplierFilter, setSupplierFilter] = useState('All Suppliers');
-  const [stockStatusFilter, setStockStatusFilter] = useState<'all' | 'low'>('all');
+  const [stockStatusFilter, setStockStatusFilter] = useState<'all' | 'low'>(initialStockFilter || 'all');
   const [viewDetailsProduct, setViewDetailsProduct] = useState<Product | null>(null);
+
+  useEffect(() => {
+    if (initialStockFilter) {
+      setStockStatusFilter(initialStockFilter);
+      setActiveView('products');
+    }
+  }, [initialStockFilter]);
 
   // Compute active product categories dynamically
   const activeCategories = useMemo(() => {
@@ -110,6 +121,7 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [deleteConfirmProduct, setDeleteConfirmProduct] = useState<Product | null>(null);
 
   // Manage Categories modal state
   const [isManageCatOpen, setIsManageCatOpen] = useState(false);
@@ -885,6 +897,19 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
                               >
                                 <Edit2 className="w-3.5 h-3.5" />
                               </button>
+
+                              {/* Delete Product */}
+                              {onDeleteProduct && (
+                                <button
+                                  type="button"
+                                  id={`btn-delete-${prod.productId}`}
+                                  onClick={() => setDeleteConfirmProduct(prod)}
+                                  title={`Delete product "${prod.name}"`}
+                                  className="p-1.5 bg-zinc-100 hover:bg-rose-50 hover:text-rose-600 text-zinc-400 rounded transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1699,21 +1724,40 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
                 </div>
               </div>
 
-              <div className="pt-3 border-t border-zinc-100 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddProductOpen(false)}
-                  className="px-3.5 py-1.5 border border-zinc-200 text-zinc-700 rounded-lg text-xs font-semibold hover:bg-zinc-50 cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  id="btn-save-product-form"
-                  className="px-4 py-1.5 bg-black hover:bg-zinc-800 text-white rounded-lg text-xs font-semibold shadow-xs cursor-pointer"
-                >
-                  {editingProduct ? 'Save Changes' : 'Create Item'}
-                </button>
+              <div className="pt-3 border-t border-zinc-100 flex items-center justify-between gap-2">
+                <div>
+                  {editingProduct && onDeleteProduct && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const p = editingProduct;
+                        setIsAddProductOpen(false);
+                        setEditingProduct(null);
+                        setDeleteConfirmProduct(p);
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Product</span>
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddProductOpen(false)}
+                    className="px-3.5 py-1.5 border border-zinc-200 text-zinc-700 rounded-lg text-xs font-semibold hover:bg-zinc-50 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    id="btn-save-product-form"
+                    className="px-4 py-1.5 bg-black hover:bg-zinc-800 text-white rounded-lg text-xs font-semibold shadow-xs cursor-pointer"
+                  >
+                    {editingProduct ? 'Save Changes' : 'Create Item'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -2016,17 +2060,34 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
 
               {/* Footer Actions */}
               <div className="pt-3 border-t border-zinc-100 flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setViewDetailsProduct(null);
-                    openEditProductModal(prod);
-                  }}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-800 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
-                >
-                  <Edit2 className="w-3.5 h-3.5" />
-                  <span>Edit Product</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setViewDetailsProduct(null);
+                      openEditProductModal(prod);
+                    }}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-800 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span>Edit Product</span>
+                  </button>
+
+                  {onDeleteProduct && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const p = prod;
+                        setViewDetailsProduct(null);
+                        setDeleteConfirmProduct(p);
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Product</span>
+                    </button>
+                  )}
+                </div>
 
                 <button
                   type="button"
@@ -2341,6 +2402,72 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
                 className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
               >
                 Reassign & Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Product Confirmation Modal */}
+      {deleteConfirmProduct && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 space-y-4 border border-zinc-200 animate-scale-up">
+            <div className="flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-zinc-950">Delete Product?</h3>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Are you sure you want to permanently remove this electrical item from inventory?
+                </p>
+              </div>
+            </div>
+
+            {/* Product Details Card */}
+            <div className="p-3 bg-zinc-50 rounded-xl border border-zinc-200 space-y-1.5 text-xs">
+              <div className="flex items-center justify-between font-semibold text-zinc-900">
+                <span>{deleteConfirmProduct.name}</span>
+                <span className="font-mono text-zinc-700">{formatINR(deleteConfirmProduct.sellingPrice)}</span>
+              </div>
+              <div className="flex flex-wrap gap-2 text-[11px] text-zinc-500">
+                <span>Category: <strong className="text-zinc-700">{deleteConfirmProduct.category}</strong></span>
+                {deleteConfirmProduct.skuCode && (
+                  <span>• SKU: <strong className="font-mono text-zinc-700">{deleteConfirmProduct.skuCode}</strong></span>
+                )}
+                <span>• Stock: <strong className="text-zinc-700">{deleteConfirmProduct.stockQty} {deleteConfirmProduct.unit}</strong></span>
+              </div>
+            </div>
+
+            {/* Warning if stock > 0 */}
+            {deleteConfirmProduct.stockQty > 0 && (
+              <div className="flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  Warning: There are currently <strong>{deleteConfirmProduct.stockQty} {deleteConfirmProduct.unit}</strong> remaining in stock. Deleting this product will remove it from active inventory and billing lookups.
+                </span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-zinc-100">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmProduct(null)}
+                className="px-4 py-2 rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50 font-medium text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onDeleteProduct) {
+                    onDeleteProduct(deleteConfirmProduct.productId);
+                  }
+                  setDeleteConfirmProduct(null);
+                }}
+                className="px-5 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs shadow-sm transition-colors cursor-pointer"
+              >
+                Delete Product
               </button>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { Product, Supplier, SupplierTransaction, Invoice, ShopSettings, StockTransaction, Customer, DraftBillingState } from '../types';
+import { Product, Supplier, SupplierTransaction, Invoice, ShopSettings, StockTransaction, Customer, DraftBillingState, HeldInvoice } from '../types';
 import {
   INITIAL_PRODUCTS,
   INITIAL_SUPPLIERS,
@@ -18,6 +18,7 @@ const STORAGE_KEYS = {
   SETTINGS: 'elec_shop_settings_v3',
   STOCK_TX: 'elec_shop_stock_tx_v3',
   DRAFT_BILL: 'elec_shop_draft_bill_v3',
+  HELD_BILLS: 'elec_shop_held_bills_v1',
   CATEGORIES: 'elec_shop_categories_v3',
   RECENT_PRODUCTS: 'elec_shop_recent_billing_products_v1',
 };
@@ -147,34 +148,43 @@ export function loadShopSettings(): ShopSettings {
     const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     if (!raw) return INITIAL_SHOP_SETTINGS;
     const parsed = JSON.parse(raw);
+    const merged: ShopSettings = {
+      ...INITIAL_SHOP_SETTINGS,
+      ...parsed,
+    };
     if (
-      !parsed.shopName ||
-      parsed.shopName === 'ElectroFlow' ||
-      parsed.shopName === 'ElectroFlow Electricals' ||
-      parsed.shopName === 'Sri Senthur Velan'
+      !merged.shopName ||
+      merged.shopName === 'ElectroFlow' ||
+      merged.shopName === 'ElectroFlow Electricals' ||
+      merged.shopName === 'Sri Senthur Velan' ||
+      merged.shopName.trim().toLowerCase() === 'sri senthur velan' ||
+      !merged.shopName.toLowerCase().includes('pipes')
     ) {
-      parsed.shopName = 'Sri Senthur Velan Electricals and Pipes';
-      parsed.tagline = 'Electricals, Pipes & Hardware Retail';
+      merged.shopName = 'Sri Senthur Velan Electricals and Pipes';
+      merged.tagline = 'Your trusted electrical partner';
       try {
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
       } catch {
         // ignore
       }
     }
+    if (!merged.tagline || merged.tagline === 'Electricals, Pipes & Hardware Retail') {
+      merged.tagline = 'Your trusted electrical partner';
+    }
     // Default should be ink printer. Migrate old default from previous sessions:
     const inkMigrated = localStorage.getItem('srisenthur_default_printer_ink_v1');
     if (!inkMigrated) {
-      parsed.defaultPrinterType = 'ink';
+      merged.defaultPrinterType = 'ink';
       try {
         localStorage.setItem('srisenthur_default_printer_ink_v1', 'true');
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
       } catch {
         // ignore
       }
-    } else if (parsed.defaultPrinterType === 'laser' || !parsed.defaultPrinterType) {
-      parsed.defaultPrinterType = 'ink';
+    } else if ((merged.defaultPrinterType as string) === 'laser' || !merged.defaultPrinterType) {
+      merged.defaultPrinterType = 'ink';
       try {
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
       } catch {
         // ignore
       }
@@ -183,23 +193,23 @@ export function loadShopSettings(): ShopSettings {
     // Default should be Cash Memo (defaultGstOn: false). Migrate old default:
     const cashMemoMigrated = localStorage.getItem('srisenthur_default_cash_memo_v1');
     if (!cashMemoMigrated) {
-      parsed.defaultGstOn = false;
+      merged.defaultGstOn = false;
       try {
         localStorage.setItem('srisenthur_default_cash_memo_v1', 'true');
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
       } catch {
         // ignore
       }
     }
-    if (parsed.upiId !== undefined) {
-      delete parsed.upiId;
+    if (merged.upiId !== undefined) {
+      delete merged.upiId;
       try {
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
       } catch {
         // ignore
       }
     }
-    return parsed;
+    return merged;
   } catch {
     return INITIAL_SHOP_SETTINGS;
   }
@@ -252,6 +262,23 @@ export function clearDraftBilling(): void {
     localStorage.removeItem(STORAGE_KEYS.DRAFT_BILL);
   } catch (e) {
     console.error('Failed to clear draft billing', e);
+  }
+}
+
+export function loadHeldInvoices(): HeldInvoice[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.HELD_BILLS);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveHeldInvoices(held: HeldInvoice[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.HELD_BILLS, JSON.stringify(held));
+  } catch (e) {
+    console.error('Failed to save held invoices', e);
   }
 }
 

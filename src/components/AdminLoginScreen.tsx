@@ -150,7 +150,7 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({
             />
           </div>
           <h1 className="text-lg font-bold text-slate-900 tracking-tight">
-            {settings.shopName || 'Sri Senthur Velan Electricals and Pipes'}
+            {settings.shopName || 'Store'}
           </h1>
           <p className="text-xs text-slate-500 mt-1 font-medium">
             POS Billing & Inventory Management
@@ -360,7 +360,7 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({
 
         {/* Footer */}
         <div className="px-6 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-          <span>Sri Senthur Velan POS</span>
+          <span>{settings.shopName || 'Store'} POS</span>
           <span className="flex items-center gap-1">
             <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
             System Ready

@@ -17,18 +17,16 @@ export interface InvoicePageData {
 }
 
 /**
- * Paginates invoice items for A4 Ink printing:
- * - Single-page limit: <= 10 items (fits full store header, customer box, table, totals, terms, and signature)
- * - Multi-page:
- *   - Page 1: Full header + Customer Box -> fits up to 12 items
- *   - Middle Pages: Condensed header -> fits up to 16 items
- *   - Final (Last) Page: Condensed header + Totals & Footers -> fits up to 10 items
+ * Paginates invoice items for printing:
+ * - A5 bill: maximum 15 products per page
+ * - A4 bill: maximum 25 products per page
+ * - Splits into multiple pages when total items exceed maxPerPage
+ * - Totals and summary are displayed strictly on the final page
  */
-export function paginateInvoiceItems(items: InvoiceItem[]): InvoicePageData[] {
+export function paginateInvoiceItems(items: InvoiceItem[], maxPerPage: number = 25): InvoicePageData[] {
   const total = items.length;
 
-  if (total <= 10) {
-    const subtotal = items.reduce((sum, it) => sum + it.lineTotal, 0);
+  if (total === 0) {
     return [
       {
         pageIndex: 0,
@@ -36,9 +34,9 @@ export function paginateInvoiceItems(items: InvoiceItem[]): InvoicePageData[] {
         totalPages: 1,
         isFirstPage: true,
         isLastPage: true,
-        items: items.map((item, i) => ({ item, originalIndex: i })),
-        pageSubtotal: subtotal,
-        runningSubtotal: subtotal,
+        items: [],
+        pageSubtotal: 0,
+        runningSubtotal: 0,
       },
     ];
   }
@@ -49,37 +47,8 @@ export function paginateInvoiceItems(items: InvoiceItem[]): InvoicePageData[] {
   }));
 
   const pagesGroups: IndexedInvoiceItem[][] = [];
-
-  if (total <= 22) {
-    // 2 pages split: ensure last page has <= 10 items
-    const page2Count = Math.min(10, Math.floor(total / 2));
-    const page1Count = total - page2Count;
-    pagesGroups.push(indexed.slice(0, page1Count));
-    pagesGroups.push(indexed.slice(page1Count));
-  } else {
-    // 3 or more pages:
-    // Page 1 takes 12 items
-    pagesGroups.push(indexed.slice(0, 12));
-    let remainder = indexed.slice(12);
-
-    while (remainder.length > 0) {
-      if (remainder.length <= 10) {
-        // Fits comfortably on last page alongside Totals & Footer
-        pagesGroups.push(remainder);
-        break;
-      } else if (remainder.length <= 20) {
-        // Split into 1 middle page and 1 final page
-        const lastCount = Math.min(10, Math.floor(remainder.length / 2));
-        const midCount = remainder.length - lastCount;
-        pagesGroups.push(remainder.slice(0, midCount));
-        pagesGroups.push(remainder.slice(midCount));
-        break;
-      } else {
-        // Middle page takes 14 items
-        pagesGroups.push(remainder.slice(0, 14));
-        remainder = remainder.slice(14);
-      }
-    }
+  for (let i = 0; i < total; i += maxPerPage) {
+    pagesGroups.push(indexed.slice(i, i + maxPerPage));
   }
 
   const totalPages = pagesGroups.length;

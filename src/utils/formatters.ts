@@ -143,28 +143,67 @@ export function formatShopAddress(settings: {
   pincode?: string;
 }): string {
   const parts: string[] = [];
-  if (settings.address && settings.address.trim()) {
-    parts.push(settings.address.trim());
+  const rawAddr = settings.address?.trim();
+  if (rawAddr) {
+    parts.push(rawAddr);
   }
-  
+
   const localityParts: string[] = [];
-  if (settings.city && settings.city.trim()) {
-    localityParts.push(settings.city.trim());
+  const city = settings.city?.trim();
+  const state = settings.state?.trim();
+  const pincode = settings.pincode?.trim();
+
+  // Only add city/state if they are not already verbatim in rawAddr
+  if (city && (!rawAddr || !rawAddr.toLowerCase().includes(city.toLowerCase()))) {
+    localityParts.push(city);
   }
-  if (settings.state && settings.state.trim()) {
-    localityParts.push(settings.state.trim());
+  if (state && (!rawAddr || !rawAddr.toLowerCase().includes(state.toLowerCase()))) {
+    localityParts.push(state);
   }
-  
+
   let locality = localityParts.join(', ');
-  if (settings.pincode && settings.pincode.trim()) {
-    locality = locality ? `${locality} - ${settings.pincode.trim()}` : settings.pincode.trim();
+  if (pincode && (!rawAddr || !rawAddr.includes(pincode))) {
+    locality = locality ? `${locality} - ${pincode}` : pincode;
   }
-  
+
   if (locality) {
     parts.push(locality);
   }
-  
+
   return parts.join(', ');
+}
+
+export function formatShopPhone(phone?: string, altPhone?: string): string {
+  const parts: string[] = [];
+  if (phone && phone.trim()) {
+    const clean = phone.trim();
+    parts.push(clean.startsWith('+') ? clean : `+91 ${clean}`);
+  }
+  if (altPhone && altPhone.trim()) {
+    const cleanAlt = altPhone.trim();
+    parts.push(cleanAlt.startsWith('+') ? cleanAlt : `+91 ${cleanAlt}`);
+  }
+  return parts.join(' / ');
+}
+
+export function formatShopContactLine(settings: {
+  phone?: string;
+  alternatePhone?: string;
+  gstin?: string;
+  email?: string;
+}): string {
+  const parts: string[] = [];
+  const phoneText = formatShopPhone(settings.phone, settings.alternatePhone);
+  if (phoneText) {
+    parts.push(`Ph: ${phoneText}`);
+  }
+  if (settings.email && settings.email.trim()) {
+    parts.push(`Email: ${settings.email.trim()}`);
+  }
+  if (settings.gstin && settings.gstin.trim()) {
+    parts.push(`GSTIN: ${settings.gstin.trim()}`);
+  }
+  return parts.join('  |  ');
 }
 
 export function getShopLogoUrl(settings?: { logoUrl?: string } | null): string {

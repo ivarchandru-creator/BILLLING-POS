@@ -14,6 +14,7 @@ import {
   History,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Download,
   Edit2,
   Trash2,
@@ -695,9 +696,10 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                           {onDeleteSupplier && (
                             <button
                               type="button"
+                              id={`btn-delete-supplier-${sup.supplierId}`}
                               onClick={() => setDeleteConfirmSupplier(sup)}
-                              className="p-1.5 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                              title="Delete supplier"
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              title={`Delete supplier ${sup.companyName}`}
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -865,20 +867,39 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsAddEditModalOpen(false)}
-                  className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium text-xs transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-lg bg-orange-500 hover:bg-orange-600 active:bg-orange-700 text-white font-semibold text-xs shadow-sm transition-colors cursor-pointer"
-                >
-                  {editingSupplierId ? 'Update Supplier' : 'Save Supplier'}
-                </button>
+              <div className="flex items-center justify-between gap-2.5 pt-4 border-t border-slate-100">
+                <div>
+                  {editingSupplierId && onDeleteSupplier && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const sup = suppliers.find((s) => s.supplierId === editingSupplierId);
+                        setIsAddEditModalOpen(false);
+                        setEditingSupplierId(null);
+                        if (sup) setDeleteConfirmSupplier(sup);
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Supplier</span>
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddEditModalOpen(false)}
+                    className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium text-xs transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 rounded-lg bg-orange-500 hover:bg-orange-600 active:bg-orange-700 text-white font-semibold text-xs shadow-sm transition-colors cursor-pointer"
+                  >
+                    {editingSupplierId ? 'Update Supplier' : 'Save Supplier'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -1374,17 +1395,33 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
 
             {/* Bottom Modal Actions */}
             <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => {
-                  openEditSupplierModal(selectedSupplierDetails);
-                  setSelectedSupplierDetails(null);
-                }}
-                className="flex items-center gap-1 text-slate-600 hover:text-slate-900 text-xs font-medium"
-              >
-                <Edit2 className="w-3.5 h-3.5" />
-                <span>Edit Vendor Info</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    openEditSupplierModal(selectedSupplierDetails);
+                    setSelectedSupplierDetails(null);
+                  }}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Edit Vendor Info</span>
+                </button>
+                {onDeleteSupplier && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const sup = selectedSupplierDetails;
+                      setSelectedSupplierDetails(null);
+                      setDeleteConfirmSupplier(sup);
+                    }}
+                    className="flex items-center gap-1 px-3 py-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Supplier</span>
+                  </button>
+                )}
+              </div>
 
               <button
                 type="button"
@@ -1403,24 +1440,38 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 space-y-4 border border-slate-200">
             <div className="flex items-center gap-3 text-rose-600">
-              <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center shrink-0">
                 <Trash2 className="w-5 h-5" />
               </div>
-              <h3 className="font-bold text-sm text-slate-900">Delete Supplier?</h3>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900">Delete Supplier?</h3>
+                <p className="text-[11px] text-slate-500">Remove vendor from directory</p>
+              </div>
             </div>
-            <p className="text-xs text-slate-600">
-              Are you sure you want to remove <strong className="text-slate-900">{deleteConfirmSupplier.companyName}</strong>?
+
+            <div className="text-xs text-slate-600 space-y-2 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+              <p>
+                Are you sure you want to remove <strong className="text-slate-900">{deleteConfirmSupplier.companyName}</strong>?
+              </p>
+              <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200">
+                <span>Contact: <strong className="text-slate-700">{deleteConfirmSupplier.name || '—'}</strong></span>
+                <span>Ph: <strong className="text-slate-700">{deleteConfirmSupplier.phone || '—'}</strong></span>
+              </div>
               {(deleteConfirmSupplier.balance || 0) > 0 && (
-                <span className="block text-rose-600 font-semibold mt-1">
-                  Warning: This supplier currently has an outstanding balance of {formatINR(deleteConfirmSupplier.balance || 0)}.
-                </span>
+                <div className="flex items-start gap-2 p-2 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-[11px] font-medium">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span>
+                    Warning: This supplier currently has an outstanding balance of <strong>{formatINR(deleteConfirmSupplier.balance || 0)}</strong>.
+                  </span>
+                </div>
               )}
-            </p>
+            </div>
+
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setDeleteConfirmSupplier(null)}
-                className="px-3.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium"
+                className="px-3.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium cursor-pointer"
               >
                 Cancel
               </button>
@@ -1432,7 +1483,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                   }
                   setDeleteConfirmSupplier(null);
                 }}
-                className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-2xs"
+                className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-2xs cursor-pointer"
               >
                 Delete Supplier
               </button>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   Search,
   Plus,
@@ -13,7 +13,6 @@ import {
   ShoppingCart,
   Percent,
   X,
-  Receipt,
   RotateCcw,
   Sparkles,
   Info,
@@ -25,10 +24,25 @@ import {
   Building2,
   RefreshCw,
   Clock,
+  Pause,
+  Play,
+  Layers,
+  AlertCircle,
+  ArrowRight,
+  Keyboard,
+  HelpCircle,
 } from 'lucide-react';
-import { Product, InvoiceItem, Invoice, PaymentMethod, ShopSettings, Customer } from '../types';
+import { Product, InvoiceItem, Invoice, PaymentMethod, ShopSettings, Customer, HeldInvoice, BillPaperSize } from '../types';
 import { formatINR, generateInvoiceNumber, getCurrentDateTimeFormatted } from '../utils/formatters';
-import { loadDraftBilling, saveDraftBilling, clearDraftBilling, loadRecentBillingProductIds, saveRecentBillingProductIds } from '../utils/storage';
+import {
+  loadDraftBilling,
+  saveDraftBilling,
+  clearDraftBilling,
+  loadRecentBillingProductIds,
+  saveRecentBillingProductIds,
+  loadHeldInvoices,
+  saveHeldInvoices,
+} from '../utils/storage';
 
 interface BillingScreenProps {
   products: Product[];
@@ -54,20 +68,106 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   // Product Search
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [activeSearchIndex, setActiveSearchIndex] = useState<number>(0);
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState<boolean>(false);
+
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
-  const handleCompleteSaleRef = useRef<(forceNew?: boolean) => void>(() => {});
+  const searchDropdownRef = useRef<HTMLDivElement>(null);
   const handlePrintBillRef = useRef<() => void>(() => {});
+
+  // Fast Keyboard Navigation & Layout Scrolling Refs
+  const billingContainerRef = useRef<HTMLDivElement>(null);
+  const customerDetailsSectionRef = useRef<HTMLDivElement>(null);
+  const paymentSectionRef = useRef<HTMLDivElement>(null);
+  const sizeAndPrintSectionRef = useRef<HTMLDivElement>(null);
+  const printBillBtnRef = useRef<HTMLButtonElement>(null);
+
+  const customerSelectRef = useRef<HTMLSelectElement>(null);
+  const customerPhoneInputRef = useRef<HTMLInputElement>(null);
+  const customerNameInputRef = useRef<HTMLInputElement>(null);
+  const customerAddressInputRef = useRef<HTMLInputElement>(null);
+  const customerGstinInputRef = useRef<HTMLInputElement>(null);
+  const cashTenderedInputRef = useRef<HTMLInputElement>(null);
+  const paymentDueDateInputRef = useRef<HTMLInputElement>(null);
+  const discountAmountInputRef = useRef<HTMLInputElement>(null);
+  const discountPercentInputRef = useRef<HTMLInputElement>(null);
+  const cartQtyInputsRef = useRef<Map<string, HTMLInputElement>>(new Map());
+  const cartPriceInputsRef = useRef<Map<string, HTMLInputElement>>(new Map());
+
+  // Auto-scroll functions for smooth zero-mouse POS billing
+  const scrollToTop = () => {
+    if (billingContainerRef.current) {
+      billingContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    searchInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
+  const scrollToCustomerDetails = () => {
+    if (billingContainerRef.current) {
+      billingContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    customerDetailsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const scrollToBottom = () => {
+    if (billingContainerRef.current) {
+      billingContainerRef.current.scrollTo({
+        top: billingContainerRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    }
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    }
+    sizeAndPrintSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    printBillBtnRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  };
+
+  // Dedicated auto-scroll down to Cash Tendered option and checkout controls
+  const scrollDownToCashTendered = useCallback(() => {
+    const doScroll = () => {
+      const cashInput =
+        cashTenderedInputRef.current ||
+        (document.getElementById('input-cash-tendered') as HTMLInputElement | null);
+
+      if (cashInput) {
+        cashInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (paymentSectionRef.current) {
+        paymentSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      if (billingContainerRef.current) {
+        billingContainerRef.current.scrollTo({
+          top: billingContainerRef.current.scrollHeight,
+          behavior: 'smooth',
+        });
+      }
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      }
+    };
+
+    doScroll();
+    setTimeout(doScroll, 40);
+  }, []);
 
   // Restore draft state from localStorage if available
   const initialDraft = useMemo(() => loadDraftBilling(), []);
 
   // Cart / Line Items (preserved across sections & browser reloads)
   const [cartItems, setCartItems] = useState<InvoiceItem[]>(() => initialDraft?.cartItems || []);
+  const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({});
+  const [focusedCartProductId, setFocusedCartProductId] = useState<string | null>(null);
 
   // GST Mode: Cash Memo (Default) vs GST Tax Invoice (Optional)
   const [isGstBill, setIsGstBill] = useState(() => initialDraft?.isGstBill ?? (settings.defaultGstOn ?? false));
-  const [overrideGstRate, setOverrideGstRate] = useState<number>(() => initialDraft?.overrideGstRate ?? (settings.defaultGstRate || 18));
 
   // Customer State
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(() => initialDraft?.selectedCustomerId || 'walk-in');
@@ -98,6 +198,12 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   // Payment Method
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(() => initialDraft?.paymentMethod || 'cash');
 
+  // Bill Paper Size / Format: A4 vs A5
+  const [billPaperSize, setBillPaperSize] = useState<'a4' | 'a5'>(() => {
+    if (initialDraft?.billPaperSize === 'a5') return 'a5';
+    return 'a4';
+  });
+
   // Recently Added Products for quick access under search bar
   const [recentProductIds, setRecentProductIds] = useState<string[]>(() => {
     const saved = loadRecentBillingProductIds();
@@ -125,6 +231,10 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       .map((id) => products.find((p) => p.productId === id))
       .filter((p): p is Product => Boolean(p));
   }, [recentProductIds, products]);
+
+  // Held Invoices (Simple 1-click parking for serving urgent customers)
+  const [heldInvoices, setHeldInvoices] = useState<HeldInvoice[]>(() => loadHeldInvoices());
+  const handleHoldAndNewBillRef = useRef<() => void>(() => {});
 
   // Cash Tendered & Change Due
   const [cashTendered, setCashTendered] = useState<string>(() => initialDraft?.cashTendered ?? '');
@@ -218,6 +328,46 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     }
   };
 
+  // Focus and select the discount input for instant editing
+  const focusAndSelectDiscountInput = useCallback(() => {
+    setTimeout(() => {
+      const el =
+        discountType === 'amount'
+          ? discountAmountInputRef.current || (document.getElementById('input-discount-amount') as HTMLInputElement | null)
+          : discountPercentInputRef.current || (document.getElementById('input-discount-percent') as HTMLInputElement | null);
+      if (el) {
+        try {
+          el.focus({ preventScroll: true });
+        } catch {
+          el.focus();
+        }
+        el.select();
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 40);
+  }, [discountType]);
+
+  // Smoothly activate Cash payment mode, scroll down automatically, and focus Cash Tendered
+  const focusCashTendered = useCallback(() => {
+    setPaymentMethod('cash');
+    scrollDownToCashTendered();
+    setTimeout(() => {
+      scrollDownToCashTendered();
+      const el =
+        cashTenderedInputRef.current ||
+        (document.getElementById('input-cash-tendered') as HTMLInputElement | null);
+      if (el) {
+        try {
+          el.focus({ preventScroll: true });
+        } catch {
+          el.focus();
+        }
+        el.select();
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 50);
+  }, [scrollDownToCashTendered]);
+
   // Sync draft state to localStorage & notify parent component of active cart item count
   useEffect(() => {
     onCartCountChange?.(cartItems.length);
@@ -244,13 +394,13 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
         paymentMethod,
         paymentDueDate,
         isGstBill,
-        overrideGstRate,
         discountType,
         discountAmount: discountType === 'amount' ? (parseFloat(discountAmountInput) || 0) : discountAmount,
         discountPercent: effectiveDiscountPercent,
         cashTendered,
         activeInvoiceId: activeInvoiceSession?.invoiceId,
         activeInvoiceNumber: activeInvoiceSession?.invoiceNumber,
+        billPaperSize,
       });
     } else {
       clearDraftBilling();
@@ -266,7 +416,6 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     paymentMethod,
     paymentDueDate,
     isGstBill,
-    overrideGstRate,
     discountType,
     discountAmountInput,
     discountPercentInput,
@@ -274,6 +423,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     effectiveDiscountPercent,
     cashTendered,
     activeInvoiceSession,
+    billPaperSize,
     onCartCountChange,
   ]);
 
@@ -301,32 +451,198 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  // Keyboard Shortcuts (Ctrl+F for search, F12 for Checkout, Escape to close search)
+  // Autofocus product search on initial load
+  useEffect(() => {
+    searchInputRef.current?.focus();
+  }, []);
+
+  // Global POS Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+      const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+      const isAlt = e.altKey;
+      const key = e.key.toLowerCase();
+      const code = e.code;
+      const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      const isInput = targetTag === 'input' || targetTag === 'textarea' || targetTag === 'select';
+
+      // 1. F1: Toggle Keyboard Shortcuts Cheat Sheet Guide
+      if (e.key === 'F1') {
         e.preventDefault();
+        setShowShortcutsHelp((prev) => !prev);
+        return;
+      }
+
+      // 2. Print Bill: ONLY Ctrl+Enter / Cmd+Enter
+      if (isCmdOrCtrl && (e.key === 'Enter' || code === 'Enter' || code === 'NumpadEnter')) {
+        e.preventDefault();
+        if (cartItems.length > 0) {
+          handlePrintBillRef.current?.();
+        } else {
+          showToast('Cart is empty. Search products first.');
+          scrollToTop();
+          searchInputRef.current?.focus();
+        }
+        return;
+      }
+
+      // If user presses F12, guide them to Ctrl+Enter
+      if (e.key === 'F12') {
+        e.preventDefault();
+        showToast('Press Ctrl+Enter to Print Bill.');
+        return;
+      }
+
+      // 3. Customer Details: F4, Ctrl+K, Cmd+K, Alt+K, Alt+C
+      if (
+        e.key === 'F4' ||
+        (isCmdOrCtrl && (key === 'k' || code === 'KeyK')) ||
+        (isAlt && (key === 'k' || code === 'KeyK' || key === 'c' || code === 'KeyC'))
+      ) {
+        e.preventDefault();
+        scrollToCustomerDetails();
+        customerPhoneInputRef.current?.focus();
+        customerPhoneInputRef.current?.select();
+        showToast('Customer Details (Enter mobile or name)');
+        return;
+      }
+
+      // 4. Focus Product Search: F2, Ctrl+F, Cmd+F, or '/' (when not editing an input)
+      if (
+        e.key === 'F2' ||
+        (isCmdOrCtrl && (key === 'f' || code === 'KeyF')) ||
+        (!isInput && e.key === '/')
+      ) {
+        e.preventDefault();
+        scrollToTop();
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
         setIsSearchFocused(true);
-      } else if (e.key === 'Escape') {
+        return;
+      }
+
+      // 5. Jump to Cart Line Items: F3, Alt+I
+      if (e.key === 'F3' || (isAlt && (key === 'i' || code === 'KeyI'))) {
+        e.preventDefault();
+        scrollToTop();
+        if (cartItems.length > 0) {
+          const firstId = cartItems[0].productId;
+          const el =
+            cartQtyInputsRef.current.get(firstId) ||
+            (document.getElementById(`input-cart-qty-${firstId}`) as HTMLInputElement | null);
+          el?.focus();
+          el?.select();
+          showToast('Cart Line Items: Type quantity, hit Enter to return to search.');
+        } else {
+          showToast('Cart is currently empty.');
+          searchInputRef.current?.focus();
+        }
+        return;
+      }
+
+      // 6. Hold & New Bill: F6, Ctrl+H, Cmd+H
+      if (e.key === 'F6' || (isCmdOrCtrl && (key === 'h' || code === 'KeyH'))) {
+        e.preventDefault();
+        handleHoldAndNewBillRef.current?.();
+        return;
+      }
+
+      // 7. Payment Modes:
+      // Cash: F7, Alt+1
+      if (e.key === 'F7' || (isAlt && (e.key === '1' || code === 'Digit1'))) {
+        e.preventDefault();
+        focusCashTendered();
+        showToast('Payment mode: Cash (Cash Tendered selected)');
+        return;
+      }
+
+      // UPI: F8, Alt+2
+      if (e.key === 'F8' || (isAlt && (e.key === '2' || code === 'Digit2'))) {
+        e.preventDefault();
+        setPaymentMethod('upi');
+        showToast('Payment mode: UPI');
+        scrollToBottom();
+        return;
+      }
+
+      // Card: F9, Alt+3
+      if (e.key === 'F9' || (isAlt && (e.key === '3' || code === 'Digit3'))) {
+        e.preventDefault();
+        setPaymentMethod('card');
+        showToast('Payment mode: Card');
+        scrollToBottom();
+        return;
+      }
+
+      // Credit: F10
+      if (e.key === 'F10') {
+        e.preventDefault();
+        setPaymentMethod('credit');
+        showToast('Payment mode: Credit (Due)');
+        scrollToBottom();
+        setTimeout(() => {
+          paymentDueDateInputRef.current?.focus();
+        }, 50);
+        return;
+      }
+
+      // 8. Discount: Alt+D, Ctrl+D, Cmd+D
+      if ((isAlt || isCmdOrCtrl) && (key === 'd' || code === 'KeyD')) {
+        e.preventDefault();
+        focusAndSelectDiscountInput();
+        showToast('Discount: Type discount and press Enter');
+        return;
+      }
+
+      // 9. Paper size: Alt+A / Alt+4 for A4, Alt+5 for A5
+      if (isAlt && (key === 'a' || code === 'KeyA' || e.key === '4' || code === 'Digit4')) {
+        e.preventDefault();
+        setBillPaperSize('a4');
+        showToast('Paper size: A4');
+        scrollToBottom();
+        return;
+      }
+      if (isAlt && (e.key === '5' || code === 'Digit5')) {
+        e.preventDefault();
+        setBillPaperSize('a5');
+        showToast('Paper size: A5');
+        scrollToBottom();
+        return;
+      }
+
+      // 10. Clear Cart: Alt+X
+      if (isAlt && (key === 'x' || code === 'KeyX')) {
+        e.preventDefault();
+        handleClearCart();
+        return;
+      }
+
+      // 11. Escape: Close help modal, close search dropdown, return to search input
+      if (e.key === 'Escape') {
+        if (showShortcutsHelp) {
+          e.preventDefault();
+          setShowShortcutsHelp(false);
+          scrollToTop();
+          searchInputRef.current?.focus();
+          return;
+        }
         setIsSearchFocused(false);
-      } else if ((e.key === 'F12' || (e.ctrlKey && e.key === 'Enter')) && cartItems.length > 0) {
-        e.preventDefault();
-        handleCompleteSaleRef.current?.();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p' && cartItems.length > 0) {
-        e.preventDefault();
-        handlePrintBillRef.current?.();
+        scrollToTop();
+        searchInputRef.current?.focus();
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [cartItems.length]);
+  }, [cartItems.length, discountType, showShortcutsHelp]);
 
-  // Filtered Products for Search Autocomplete (expanded for multi-product selection)
+  // Filtered Products for Search Autocomplete
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return [];
-    const query = searchQuery.toLowerCase();
+    // If user typed shorthand like "wire 5" or "switch*10", extract query part
+    const cleanQuery = searchQuery.replace(/(?:[*xX\s])\s*(\d+(?:\.\d+)?)\s*$/, '').trim().toLowerCase();
+    const query = cleanQuery || searchQuery.toLowerCase();
+
     return products
       .filter(
         (p) =>
@@ -338,30 +654,26 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       .slice(0, 30);
   }, [products, searchQuery]);
 
-  // Product Search submit event
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-    if (searchResults.length > 0) {
-      handleAddToCart(searchResults[0]);
-    } else {
-      showToast(`No product found matching: ${searchQuery}`);
-    }
-  };
-
-  // Add Product to Cart - Keeps search active so user can add multiple items from one search!
-  const handleAddToCart = (product: Product, customQty = 1) => {
+  // Add Product directly to Cart and focus quantity input in the cart table for immediate keyboard adjustment
+  const handleAddToCart = (
+    product: Product,
+    customQty = 1,
+    customPrice?: number,
+    shouldFocusQty = true
+  ) => {
     addRecentProduct(product.productId);
+    const price = customPrice !== undefined && customPrice >= 0 ? customPrice : product.sellingPrice;
     setCartItems((prev) => {
-      const existing = prev.find((item) => item.productId === product.productId);
-      if (existing) {
-        const newQty = existing.quantity + customQty;
+      const match = prev.find((item) => item.productId === product.productId);
+      if (match) {
+        const newQty = match.quantity + customQty;
         return prev.map((item) =>
           item.productId === product.productId
             ? {
                 ...item,
                 quantity: newQty,
-                lineTotal: newQty * item.unitPrice,
+                unitPrice: price,
+                lineTotal: newQty * price,
               }
             : item
         );
@@ -372,8 +684,10 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
           productId: product.productId,
           productNameSnapshot: product.name,
           quantity: customQty,
-          unitPrice: product.sellingPrice,
-          lineTotal: customQty * product.sellingPrice,
+          unitPrice: price,
+          purchasePrice: product.purchasePrice,
+          costPrice: product.purchasePrice,
+          lineTotal: customQty * price,
           gstRate: isGstBill ? product.gstRate : 0,
           unit: product.unit,
           hsnCode: product.hsnCode,
@@ -381,12 +695,226 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       ];
     });
 
-    // NOTE: Keep search input and search results OPEN!
-    // Do NOT wipe searchQuery or close isSearchFocused!
-    showToast(`Added ${product.name}`);
+    setSearchQuery('');
+    setIsSearchFocused(false);
+    setActiveSearchIndex(0);
+
+    if (shouldFocusQty) {
+      setFocusedCartProductId(product.productId);
+      setQtyDrafts((prev) => ({ ...prev, [product.productId]: String(customQty) }));
+      setTimeout(() => {
+        const el =
+          cartQtyInputsRef.current.get(product.productId) ||
+          (document.getElementById(`input-cart-qty-${product.productId}`) as HTMLInputElement | null);
+        if (el) {
+          el.focus();
+          el.select();
+          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 50);
+      showToast(`Added ${product.name}. Type quantity directly (Enter to confirm, ↓ next item).`);
+    } else {
+      showToast(`Added ${customQty} × ${product.name}`);
+    }
   };
 
-  // Adjust Quantity
+  // Keyboard Selection from Search: handles shorthand quantity (e.g. "switch 5" or "wire*10")
+  const handleSelectProduct = (product: Product) => {
+    let initialQty = 1;
+    const match = searchQuery.match(/(?:[*xX\s])\s*(\d+(?:\.\d+)?)\s*$/);
+    if (match && match[1]) {
+      const parsed = parseFloat(match[1]);
+      if (!isNaN(parsed) && parsed > 0) initialQty = parsed;
+    }
+    handleAddToCart(product, initialQty, product.sellingPrice, true);
+  };
+
+  // Product Search submit event: Enter on search bar
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) {
+      // Empty search bar: move directly to Customer Details!
+      customerPhoneInputRef.current?.focus();
+      customerPhoneInputRef.current?.select();
+      showToast('Customer Details (Enter mobile or press Enter for Cash Tendered)');
+      return;
+    }
+    if (searchResults.length > 0 && searchResults[activeSearchIndex]) {
+      handleSelectProduct(searchResults[activeSearchIndex]);
+    } else {
+      showToast(`No product found matching: ${searchQuery}`);
+    }
+  };
+
+  // Set Quantity directly from keyboard input
+  const handleSetQty = (productId: string, newQty: number) => {
+    if (isNaN(newQty) || newQty <= 0) return;
+    setCartItems((prev) =>
+      prev.map((item) =>
+        item.productId === productId
+          ? {
+              ...item,
+              quantity: newQty,
+              lineTotal: newQty * item.unitPrice,
+            }
+          : item
+      )
+    );
+  };
+
+  // Handle Cart Quantity Input Keydown
+  const handleCartQtyKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    productId: string,
+    index: number
+  ) => {
+    const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+    if (isCmdOrCtrl && e.key === 'Enter') {
+      e.preventDefault();
+      const raw = qtyDrafts[productId];
+      if (raw !== undefined) {
+        const parsed = parseFloat(raw);
+        const safeQty = !isNaN(parsed) && parsed > 0 ? parsed : 1;
+        handleSetQty(productId, safeQty);
+        setQtyDrafts((prev) => {
+          const copy = { ...prev };
+          delete copy[productId];
+          return copy;
+        });
+      }
+      if (cartItems.length > 0) handlePrintBill();
+      else showToast('Cart is empty. Search products first.');
+      return;
+    }
+
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // Commit draft if any
+      const raw = qtyDrafts[productId];
+      if (raw !== undefined) {
+        const parsed = parseFloat(raw);
+        const safeQty = !isNaN(parsed) && parsed > 0 ? parsed : 1;
+        handleSetQty(productId, safeQty);
+        setQtyDrafts((prev) => {
+          const copy = { ...prev };
+          delete copy[productId];
+          return copy;
+        });
+      }
+      setFocusedCartProductId(null);
+      // Pressing Enter confirms quantity and immediately jumps back to search for next product!
+      scrollToTop();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+      setIsSearchFocused(true);
+      showToast('Quantity saved! Search next product or press Enter for Customer Details.');
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      const raw = qtyDrafts[productId];
+      if (raw !== undefined) {
+        const parsed = parseFloat(raw);
+        const safeQty = !isNaN(parsed) && parsed > 0 ? parsed : 1;
+        handleSetQty(productId, safeQty);
+        setQtyDrafts((prev) => {
+          const copy = { ...prev };
+          delete copy[productId];
+          return copy;
+        });
+      }
+      setFocusedCartProductId(null);
+      scrollToTop();
+      searchInputRef.current?.focus();
+      setIsSearchFocused(false);
+      return;
+    }
+
+    // Down Arrow in cart quantity: moves to next product row in cart!
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const raw = qtyDrafts[productId];
+      if (raw !== undefined) {
+        const parsed = parseFloat(raw);
+        const safeQty = !isNaN(parsed) && parsed > 0 ? parsed : 1;
+        handleSetQty(productId, safeQty);
+        setQtyDrafts((prev) => {
+          const copy = { ...prev };
+          delete copy[productId];
+          return copy;
+        });
+      }
+
+      if (cartItems.length > 1) {
+        const nextIndex = (index + 1) % cartItems.length;
+        const nextProd = cartItems[nextIndex];
+        setFocusedCartProductId(nextProd.productId);
+        const nextId = nextProd.productId;
+        const el =
+          cartQtyInputsRef.current.get(nextId) ||
+          (document.getElementById(`input-cart-qty-${nextId}`) as HTMLInputElement | null);
+        el?.focus();
+        el?.select();
+        el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        showToast(`Selected ${nextProd.productNameSnapshot}: Type quantity (${nextIndex + 1}/${cartItems.length})`);
+      } else {
+        showToast('Type quantity, press Enter to confirm and return to search.');
+      }
+      return;
+    }
+
+    // Up Arrow in cart quantity: moves to previous product row or back to search bar!
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const raw = qtyDrafts[productId];
+      if (raw !== undefined) {
+        const parsed = parseFloat(raw);
+        const safeQty = !isNaN(parsed) && parsed > 0 ? parsed : 1;
+        handleSetQty(productId, safeQty);
+        setQtyDrafts((prev) => {
+          const copy = { ...prev };
+          delete copy[productId];
+          return copy;
+        });
+      }
+
+      if (index > 0) {
+        const prevProd = cartItems[index - 1];
+        setFocusedCartProductId(prevProd.productId);
+        const prevId = prevProd.productId;
+        const el =
+          cartQtyInputsRef.current.get(prevId) ||
+          (document.getElementById(`input-cart-qty-${prevId}`) as HTMLInputElement | null);
+        el?.focus();
+        el?.select();
+        el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        showToast(`Selected ${prevProd.productNameSnapshot}: Type quantity (${index}/${cartItems.length})`);
+      } else {
+        // At the top product in cart: ArrowUp returns focus to the search bar!
+        setFocusedCartProductId(null);
+        scrollToTop();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        showToast('Returned to Product Search bar.');
+      }
+      return;
+    }
+
+    if (
+      (e.key === 'Delete' || e.key === 'Backspace') &&
+      (e.altKey || e.ctrlKey)
+    ) {
+      e.preventDefault();
+      handleRemoveItem(productId);
+      scrollToTop();
+      searchInputRef.current?.focus();
+      showToast('Item removed from cart.');
+      return;
+    }
+  };
+
+  // Adjust Quantity (+1 / -1 buttons)
   const handleUpdateQty = (productId: string, delta: number) => {
     setCartItems((prev) => {
       const target = prev.find((item) => item.productId === productId);
@@ -405,6 +933,11 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
         }
         return item;
       });
+    });
+    setQtyDrafts((prev) => {
+      const copy = { ...prev };
+      delete copy[productId];
+      return copy;
     });
   };
 
@@ -428,6 +961,14 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   const handleRemoveItem = (productId: string) => {
     setCartItems((prev) => prev.filter((item) => item.productId !== productId));
     setSelectedProductIds((prev) => prev.filter((id) => id !== productId));
+    setQtyDrafts((prev) => {
+      const copy = { ...prev };
+      delete copy[productId];
+      return copy;
+    });
+    if (focusedCartProductId === productId) {
+      setFocusedCartProductId(null);
+    }
   };
 
   // Toggle Selection for a Product
@@ -456,8 +997,9 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   };
 
   // Split into Taxable + CGST + SGST (or 0 if Non-GST Cash Memo)
+  // Calculates tax item-by-item according to each product's separate GST rate (0%, 5%, 12%, 18%, 28%)
   const { taxableAmount, cgstAmount, sgstAmount, totalGst, grandTotal } = useMemo(() => {
-    if (!isGstBill) {
+    if (!isGstBill || cartItems.length === 0) {
       const roundedTotal = Math.round(discountedSubtotal);
       return {
         taxableAmount: roundedTotal,
@@ -468,20 +1010,37 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       };
     }
 
-    // Standard Indian GST calculation
-    const avgRate = overrideGstRate || 18;
-    const taxable = Math.round((discountedSubtotal / (1 + avgRate / 100)) * 100) / 100;
-    const tax = Math.round((discountedSubtotal - taxable) * 100) / 100;
-    const cgst = Math.round((tax / 2) * 100) / 100;
-    const sgst = Math.round((tax - cgst) * 100) / 100;
+    // Accurate calculation based on each product's individual entered GST rate
+    const discountRatio = subtotal > 0 ? discountedSubtotal / subtotal : 1;
+    let totalTaxable = 0;
+    let totalTax = 0;
+
+    cartItems.forEach((item) => {
+      const effectiveLineTotal = item.lineTotal * discountRatio;
+      const rate = typeof item.gstRate === 'number' ? item.gstRate : 0;
+      if (rate > 0) {
+        const itemTaxable = effectiveLineTotal / (1 + rate / 100);
+        const itemTax = effectiveLineTotal - itemTaxable;
+        totalTaxable += itemTaxable;
+        totalTax += itemTax;
+      } else {
+        totalTaxable += effectiveLineTotal;
+      }
+    });
+
+    const roundedTax = Math.round(totalTax * 100) / 100;
+    const cgst = Math.round((roundedTax / 2) * 100) / 100;
+    const sgst = Math.round((roundedTax - cgst) * 100) / 100;
+    const taxable = Math.round(totalTaxable * 100) / 100;
+
     return {
       taxableAmount: taxable,
       cgstAmount: cgst,
       sgstAmount: sgst,
-      totalGst: tax,
+      totalGst: roundedTax,
       grandTotal: Math.round(discountedSubtotal),
     };
-  }, [discountedSubtotal, isGstBill, overrideGstRate]);
+  }, [cartItems, discountedSubtotal, isGstBill, subtotal]);
 
   // Cash Change Calculation
   const cashNum = parseFloat(cashTendered) || 0;
@@ -511,6 +1070,155 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     showToast(itemCount > 0 ? 'All products deleted. New invoice ready.' : 'Invoice reset for new customer.');
   };
 
+  // 1-Click Hold & New Bill: Immediately saves current cart to held tabs and starts blank bill for next customer
+  const handleHoldAndNewBill = () => {
+    if (cartItems.length === 0) {
+      showToast('Cannot hold an empty bill. Add products first.');
+      searchInputRef.current?.focus();
+      return;
+    }
+
+    const existingMaxHoldNum = heldInvoices.reduce((max, h) => Math.max(max, h.holdNumber || 0), 0);
+    const nextHoldNumber = existingMaxHoldNum + 1;
+    const currentDisplayName = customerName.trim() || 'Walk-in Customer';
+
+    const newHeld: HeldInvoice = {
+      id: `held-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      holdNumber: nextHoldNumber,
+      heldAt: new Date().toISOString(),
+      customerName: currentDisplayName,
+      customerPhone: customerPhone.trim(),
+      customerAddress: customerAddress.trim(),
+      customerGstin: customerGstin.trim(),
+      customerCategory,
+      selectedCustomerId,
+      cartItems: [...cartItems],
+      paymentMethod,
+      paymentDueDate,
+      isGstBill,
+      discountType,
+      discountAmount: discountType === 'amount' ? (parseFloat(discountAmountInput) || 0) : discountAmount,
+      discountPercent: effectiveDiscountPercent,
+      discountAmountInput,
+      discountPercentInput,
+      cashTendered,
+      activeInvoiceId: activeInvoiceSession?.invoiceId,
+      activeInvoiceNumber: activeInvoiceSession?.invoiceNumber,
+      subtotal,
+      grandTotal,
+    };
+
+    const updatedHeld = [newHeld, ...heldInvoices];
+    setHeldInvoices(updatedHeld);
+    saveHeldInvoices(updatedHeld);
+
+    // Reset current bill to a fresh blank invoice for the next customer
+    setCartItems([]);
+    setSelectedProductIds([]);
+    clearDraftBilling();
+    setActiveInvoiceSession(null);
+    setDiscountType('amount');
+    setDiscountAmountInput('');
+    setDiscountPercentInput('');
+    setCashTendered('');
+    setSelectedCustomerId('walk-in');
+    setCustomerName('');
+    setCustomerPhone('');
+    setCustomerAddress('');
+    setCustomerGstin('');
+    setCustomerCategory('walk-in');
+    setIsGstBill(settings.defaultGstOn ?? false);
+
+    showToast(`Bill #${newHeld.holdNumber} (${newHeld.customerName}) held! Blank bill ready.`);
+    setTimeout(() => searchInputRef.current?.focus(), 50);
+  };
+
+  handleHoldAndNewBillRef.current = handleHoldAndNewBill;
+
+  // 1-Click Resume Held Bill: Switches back to a held customer bill
+  const handleResumeHeldBill = (heldId: string) => {
+    const target = heldInvoices.find((h) => h.id === heldId);
+    if (!target) return;
+
+    // If current on-screen bill has items, safely auto-hold it so switching is 100% loss-free
+    let remainingHeld = heldInvoices.filter((h) => h.id !== heldId);
+    if (cartItems.length > 0) {
+      const existingMaxHoldNum = heldInvoices.reduce((max, h) => Math.max(max, h.holdNumber || 0), 0);
+      const currentDisplayName = customerName.trim() || 'Walk-in Customer';
+      const autoHeldCurrent: HeldInvoice = {
+        id: `held-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        holdNumber: existingMaxHoldNum + 1,
+        heldAt: new Date().toISOString(),
+        customerName: currentDisplayName,
+        customerPhone: customerPhone.trim(),
+        customerAddress: customerAddress.trim(),
+        customerGstin: customerGstin.trim(),
+        customerCategory,
+        selectedCustomerId,
+        cartItems: [...cartItems],
+        paymentMethod,
+        paymentDueDate,
+        isGstBill,
+        discountType,
+        discountAmount: discountType === 'amount' ? (parseFloat(discountAmountInput) || 0) : discountAmount,
+        discountPercent: effectiveDiscountPercent,
+        discountAmountInput,
+        discountPercentInput,
+        cashTendered,
+        activeInvoiceId: activeInvoiceSession?.invoiceId,
+        activeInvoiceNumber: activeInvoiceSession?.invoiceNumber,
+        subtotal,
+        grandTotal,
+      };
+      remainingHeld = [autoHeldCurrent, ...remainingHeld];
+    }
+
+    setHeldInvoices(remainingHeld);
+    saveHeldInvoices(remainingHeld);
+
+    // Restore the target held bill into the editor
+    setCartItems(target.cartItems || []);
+    setSelectedCustomerId(target.selectedCustomerId || 'walk-in');
+    setCustomerName(
+      target.customerName === 'Walk-in Customer (General)' || target.customerName === 'Walk-in Customer'
+        ? ''
+        : target.customerName
+    );
+    setCustomerPhone(target.customerPhone || '');
+    setCustomerAddress(target.customerAddress || '');
+    setCustomerGstin(target.customerGstin || '');
+    setCustomerCategory(target.customerCategory || 'walk-in');
+    setPaymentMethod(target.paymentMethod || 'cash');
+    setPaymentDueDate(target.paymentDueDate || new Date().toISOString().split('T')[0]);
+    setIsGstBill(target.isGstBill ?? false);
+    setDiscountType(target.discountType || 'amount');
+    setDiscountAmountInput(target.discountAmountInput || (target.discountAmount ? String(target.discountAmount) : ''));
+    setDiscountPercentInput(target.discountPercentInput || (target.discountPercent ? String(target.discountPercent) : ''));
+    setCashTendered(target.cashTendered || '');
+
+    if (target.activeInvoiceId && target.activeInvoiceNumber) {
+      setActiveInvoiceSession({
+        invoiceId: target.activeInvoiceId,
+        invoiceNumber: target.activeInvoiceNumber,
+      });
+    } else {
+      setActiveInvoiceSession(null);
+    }
+
+    showToast(`Switched to Bill #${target.holdNumber} (${target.customerName})`);
+    setTimeout(() => searchInputRef.current?.focus(), 50);
+  };
+
+  // Discard a held bill
+  const handleDeleteHeldBill = (heldId: string) => {
+    const target = heldInvoices.find((h) => h.id === heldId);
+    if (!target) return;
+    const updated = heldInvoices.filter((h) => h.id !== heldId);
+    setHeldInvoices(updated);
+    saveHeldInvoices(updated);
+    showToast(`Held bill #${target.holdNumber} discarded.`);
+  };
+
   // Helper to build the Invoice object snapshot
   const buildCurrentInvoice = (forceNewId: boolean = false): Invoice => {
     const isUpdatingExisting = !forceNewId && Boolean(activeInvoiceSession?.invoiceId);
@@ -537,96 +1245,90 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       customerAddress: customerAddress.trim() || undefined,
       customerGstin: customerGstin.trim() || undefined,
       customerCategory: resolvedCategory,
-      items: [...cartItems],
+      items: cartItems.map((it) => {
+        const matched = products.find((p) => p.productId === it.productId);
+        const cost = it.purchasePrice ?? it.costPrice ?? matched?.purchasePrice ?? 0;
+        return {
+          ...it,
+          purchasePrice: cost,
+          costPrice: cost,
+        };
+      }),
       subtotal,
       discountType,
       discountAmount,
       discountPercent: effectiveDiscountPercent,
       gstApplied: isGstBill,
-      gstRate: isGstBill ? overrideGstRate : 0,
+      gstRate: isGstBill && taxableAmount > 0 ? Math.round((totalGst / taxableAmount) * 100) : 0,
       gstAmount: totalGst,
       cgstAmount,
       sgstAmount,
       grandTotal,
       paymentMethod,
-      paymentDueDate: paymentMethod === 'credit' ? paymentDueDate : undefined,
+      paymentDueDate: paymentMethod === 'credit' ? (paymentDueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]) : undefined,
       creditPaid: paymentMethod === 'credit' ? false : true,
       creditPaidDate: paymentMethod === 'credit' ? undefined : getCurrentDateTimeFormatted(),
-      printerType: settings.defaultPrinterType,
-      templateType: settings.thermalPaperWidth,
+      printerType: 'ink',
+      templateType: billPaperSize,
       createdBy: settings.ownerName || 'Tpk Chandru',
       status: 'completed',
     };
   };
 
-  // 1. Print / Preview Bill:
-  // After printing, previously selected items are NOT deleted.
-  // Items remain in the invoice section so if the customer asks for any more products,
-  // it is easy to add products and print again!
+  // Print Bill & Record Sale:
+  // When Print Bill is clicked:
+  // 1. Records the sale in Sales History & updates inventory stock
+  // 2. Opens the printable invoice preview
+  // 3. Clears all old invoice products and resets the screen, ready for the next invoice!
+  // Note: Customer name and mobile number are 100% OPTIONAL and never block printing.
   const handlePrintBill = () => {
     if (cartItems.length === 0) {
       showToast('Cart is empty. Please add products to print bill.');
       return;
     }
-    const invoiceToPrint = buildCurrentInvoice();
-    onPreviewInvoice(invoiceToPrint);
-    showToast(`Bill #${invoiceToPrint.invoiceNumber} opened for printing. Products kept in invoice.`);
-  };
 
-  handlePrintBillRef.current = handlePrintBill;
-
-  // 2. Complete Bill:
-  // Sales are recorded in Sales History ONLY when Complete Bill is clicked.
-  // All products REMAIN in the invoice section until the user explicitly clicks "Clear All".
-  const handleCompleteSale = () => {
-    if (cartItems.length === 0) {
-      showToast('Cart is empty. Please add products to complete bill.');
-      return;
-    }
-
-    const hasEnteredName = Boolean(customerName.trim() && customerName.trim() !== 'Walk-in Customer (General)');
-    const hasEnteredPhone = Boolean(customerPhone.trim());
-    const isAutoWalkIn = !hasEnteredName && !hasEnteredPhone;
-
-    if (paymentMethod === 'credit') {
-      if (isAutoWalkIn && selectedCustomerId === 'walk-in') {
-        showToast('Please enter customer name or mobile for credit (udhar) bill');
-        return;
-      }
-      if (!paymentDueDate) {
-        showToast('Please select expected paying date for credit bill');
-        return;
-      }
-    }
-
-    const isUpdatingExisting = Boolean(activeInvoiceSession?.invoiceId);
     const invoiceToSave = buildCurrentInvoice();
 
     // 1. Record the sale in Sales History & update inventory stock
     onSaveInvoice(invoiceToSave);
 
-    // 2. Mark active invoice session so subsequent edits update this bill
-    setActiveInvoiceSession({
-      invoiceId: invoiceToSave.invoiceId,
-      invoiceNumber: invoiceToSave.invoiceNumber,
-    });
-
-    // 3. Open print modal / preview
+    // 2. Open printable invoice preview modal
     onPreviewInvoice(invoiceToSave);
 
-    // 4. NOTICE: Products are KEPT in the invoice section!
-    // They are NOT deleted until the user clicks "Clear All".
-    if (isUpdatingExisting) {
-      showToast(`Bill #${invoiceToSave.invoiceNumber} updated in Sales History! Items kept in bill.`);
-    } else {
-      showToast(`Bill #${invoiceToSave.invoiceNumber} recorded in Sales History! Items kept in bill.`);
-    }
+    // 3. Clear all old invoice products and reset screen, ready for creating next invoice
+    setCartItems([]);
+    setSelectedProductIds([]);
+    clearDraftBilling();
+    setActiveInvoiceSession(null);
+    setDiscountType('amount');
+    setDiscountAmountInput('');
+    setDiscountPercentInput('');
+    setCashTendered('');
+    setSelectedCustomerId('walk-in');
+    setCustomerName('');
+    setCustomerPhone('');
+    setCustomerAddress('');
+    setCustomerGstin('');
+    setCustomerCategory('walk-in');
+    setPaymentMethod('cash');
+    setPaymentDueDate('');
+    setIsGstBill(settings.defaultGstOn ?? false);
+
+    showToast(`Bill #${invoiceToSave.invoiceNumber} recorded & printed! Ready for next invoice.`);
+    scrollToTop();
+    setTimeout(() => {
+      scrollToTop();
+      searchInputRef.current?.focus();
+    }, 100);
   };
 
-  handleCompleteSaleRef.current = handleCompleteSale;
+  handlePrintBillRef.current = handlePrintBill;
 
   return (
-    <div className="w-full h-full p-4 sm:p-6 overflow-y-auto space-y-6 bg-slate-50 font-sans">
+    <div
+      ref={billingContainerRef}
+      className="w-full h-full p-4 sm:p-6 overflow-y-auto space-y-6 bg-slate-50 font-sans scroll-smooth"
+    >
       {/* Toast feedback */}
       {toastMsg && (
         <div className="fixed top-16 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-2.5 animate-fade-in font-medium text-xs sm:text-sm">
@@ -683,7 +1385,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                     const matchedProd = products.find((p) => p.productId === item.productId);
                     return {
                       ...item,
-                      gstRate: matchedProd?.gstRate ?? overrideGstRate ?? 18,
+                      gstRate: matchedProd?.gstRate ?? item.gstRate ?? 0,
                     };
                   })
                 );
@@ -699,6 +1401,67 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Bill Tabs: Active Bill + Held Bills + Quick 1-Click Hold */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+        {/* Active Bill Tab */}
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-orange-500 text-white font-semibold text-xs shadow-xs shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+          <span>Active Bill</span>
+          {cartItems.length > 0 && (
+            <span className="bg-orange-600 px-1.5 py-0.5 rounded text-[11px] font-mono">
+              {cartItems.length} itms • {formatINR(grandTotal)}
+            </span>
+          )}
+        </div>
+
+        {/* Held Bill Tabs */}
+        {heldInvoices.map((held) => (
+          <div
+            key={held.id}
+            className="flex items-center rounded-lg bg-amber-50 hover:bg-amber-100/90 border border-amber-300 text-amber-950 text-xs shrink-0 transition-colors shadow-2xs group"
+          >
+            <button
+              type="button"
+              onClick={() => handleResumeHeldBill(held.id)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 font-medium cursor-pointer"
+              title={`Switch back to held bill for ${held.customerName}`}
+            >
+              <Pause className="w-3 h-3 text-amber-700 fill-current" />
+              <span className="font-semibold text-amber-900">Hold #{held.holdNumber}:</span>
+              <span className="max-w-[120px] truncate">{held.customerName}</span>
+              <span className="font-mono text-amber-800 font-bold text-[11px]">
+                ({formatINR(held.grandTotal)})
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDeleteHeldBill(held.id)}
+              className="p-1.5 text-amber-600 hover:text-rose-600 hover:bg-rose-50 rounded-r-lg transition-colors border-l border-amber-300 cursor-pointer"
+              title="Discard this held bill"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+
+        {/* 1-Click Hold & New Bill Button */}
+        <button
+          type="button"
+          id="btn-hold-and-new-bill"
+          disabled={cartItems.length === 0}
+          onClick={handleHoldAndNewBill}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 ${
+            cartItems.length > 0
+              ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs cursor-pointer'
+              : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+          }`}
+          title="1-Click: Hold current bill and open fresh bill for next customer (F6)"
+        >
+          <Pause className="w-3 h-3 fill-current" />
+          <span>Hold & New Bill (F6)</span>
+        </button>
       </div>
 
       {/* Two Column Grid */}
@@ -717,36 +1480,119 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                   value={searchQuery}
                   onChange={(e) => {
                     setSearchQuery(e.target.value);
+                    setActiveSearchIndex(0);
                     if (!isSearchFocused) setIsSearchFocused(true);
                   }}
-                  onFocus={() => setIsSearchFocused(true)}
-                  placeholder="Search product by name, brand, or SKU... (Ctrl+F)"
-                  className="w-full pl-10 pr-10 py-2.5 bg-white rounded-xl border border-slate-200 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 transition-all shadow-xs font-medium"
+                  onFocus={() => {
+                    scrollToTop();
+                    setIsSearchFocused(true);
+                    if (activeSearchIndex >= searchResults.length) setActiveSearchIndex(0);
+                  }}
+                  onKeyDown={(e) => {
+                    const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+                    if (isCmdOrCtrl && e.key === 'Enter') {
+                      e.preventDefault();
+                      if (cartItems.length > 0) handlePrintBill();
+                      else showToast('Cart is empty. Search products first.');
+                      return;
+                    }
+
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      if (searchResults.length > 0 && searchQuery.trim() !== '') {
+                        setIsSearchFocused(true);
+                        setActiveSearchIndex((prev) => (prev + 1) % searchResults.length);
+                      } else if (cartItems.length > 0) {
+                        // User selected search bar and presses Down Arrow:
+                        // Select the product in the cart table to edit its quantity!
+                        setIsSearchFocused(false);
+                        const targetItem = cartItems.find((c) => c.productId === focusedCartProductId) || cartItems[0];
+                        setFocusedCartProductId(targetItem.productId);
+                        const targetId = targetItem.productId;
+                        const el =
+                          cartQtyInputsRef.current.get(targetId) ||
+                          (document.getElementById(`input-cart-qty-${targetId}`) as HTMLInputElement | null);
+                        if (el) {
+                          el.focus();
+                          el.select();
+                          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                          showToast(`Selected ${targetItem.productNameSnapshot}: Type quantity (Enter to save, ↓ next product)`);
+                        }
+                      } else {
+                        showToast('Cart is empty. Search and add products first.');
+                      }
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      if (searchResults.length > 0 && searchQuery.trim() !== '') {
+                        setIsSearchFocused(true);
+                        setActiveSearchIndex((prev) => (prev - 1 + searchResults.length) % searchResults.length);
+                      }
+                    } else if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (searchResults.length > 0 && searchResults[activeSearchIndex]) {
+                        handleSelectProduct(searchResults[activeSearchIndex]);
+                      } else if (!searchQuery.trim()) {
+                        // Empty search bar: move directly to Customer Details!
+                        scrollToCustomerDetails();
+                        customerPhoneInputRef.current?.focus();
+                        customerPhoneInputRef.current?.select();
+                        showToast('Customer Details (Enter mobile or name, or press Enter for Walk-in)');
+                      } else {
+                        showToast(`No product found matching: ${searchQuery}`);
+                      }
+                    } else if (e.key === 'Tab' && !e.shiftKey && !searchQuery.trim()) {
+                      e.preventDefault();
+                      scrollToCustomerDetails();
+                      customerPhoneInputRef.current?.focus();
+                      customerPhoneInputRef.current?.select();
+                      showToast('Customer Details');
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      scrollToTop();
+                      setIsSearchFocused(false);
+                    }
+                  }}
+                  placeholder="Search product (Type name/SKU, or ↓ to select & edit cart item qty) • [F2 / Ctrl+F]"
+                  className="w-full pl-10 pr-20 py-2.5 bg-white rounded-xl border border-slate-200 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 transition-all shadow-xs font-medium"
                 />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    id="btn-clear-search-query"
-                    onClick={() => {
-                      setSearchQuery('');
-                      searchInputRef.current?.focus();
-                    }}
-                    className="absolute right-3 p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
-                    title="Clear search"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
+                <div className="absolute right-2.5 flex items-center gap-1">
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      id="btn-clear-search-query"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setActiveSearchIndex(0);
+                        searchInputRef.current?.focus();
+                      }}
+                      className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                      title="Clear search"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <span className="hidden sm:inline-flex px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                    F2 / Ctrl+F
+                  </span>
+                </div>
               </form>
 
               {/* Product Search Results Dropdown */}
               {isSearchFocused && (
-                <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border border-slate-200 shadow-xl z-30 overflow-hidden flex flex-col max-h-80 animate-fade-in">
+                <div
+                  ref={searchDropdownRef}
+                  className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border border-slate-200 shadow-xl z-30 overflow-hidden flex flex-col max-h-80 animate-fade-in"
+                >
                   {searchResults.length > 0 ? (
                     <>
-                      {/* Header with single close button */}
-                      <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs shrink-0 font-medium">
-                        <span className="font-semibold text-slate-700">Product Matches ({searchResults.length})</span>
+                      {/* Header with keyboard instructions */}
+                      <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs shrink-0 font-medium">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-700">Matches ({searchResults.length})</span>
+                          <span className="text-[11px] text-slate-400 font-mono hidden sm:inline">
+                            ↑↓ Navigate • ↵ Enter to set quantity
+                          </span>
+                        </div>
                         <button
                           type="button"
                           id="btn-close-search-results"
@@ -758,34 +1604,53 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                         </button>
                       </div>
 
-                      {/* Product List */}
+                      {/* Product List with Highlight for Active Row */}
                       <div className="overflow-y-auto divide-y divide-slate-100">
-                        {searchResults.map((prod) => (
-                          <div
-                            key={prod.productId}
-                            className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-orange-50/50 transition-colors text-xs"
-                          >
-                            <div className="min-w-0 pr-3">
-                              <p className="font-bold text-slate-900 truncate">{prod.name}</p>
-                              <p className="text-[11px] text-slate-500 mt-0.5">
-                                {prod.category} • Stock: {prod.stockQty} {prod.unit}
-                                {prod.skuCode ? ` • SKU: ${prod.skuCode}` : ''}
-                              </p>
+                        {searchResults.map((prod, idx) => {
+                          const isHighlighted = idx === activeSearchIndex;
+                          return (
+                            <div
+                              key={prod.productId}
+                              onClick={() => handleSelectProduct(prod)}
+                              className={`w-full px-4 py-2.5 flex items-center justify-between transition-colors text-xs cursor-pointer ${
+                                isHighlighted
+                                  ? 'bg-orange-50 text-slate-900 border-l-4 border-orange-500 font-medium'
+                                  : 'hover:bg-slate-50/70 text-slate-800'
+                              }`}
+                            >
+                              <div className="min-w-0 pr-3">
+                                <div className="flex items-center gap-2">
+                                  <p className="font-bold text-slate-900 truncate">{prod.name}</p>
+                                  {isHighlighted && (
+                                    <span className="bg-orange-500 text-white text-[10px] font-mono px-1.5 py-0.5 rounded font-bold shrink-0">
+                                      ↵ Enter to Add
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-500 mt-0.5">
+                                  {prod.category} • Stock: {prod.stockQty} {prod.unit}
+                                  {prod.skuCode ? ` • SKU: ${prod.skuCode}` : ''}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-3 shrink-0">
+                                <span className="font-bold text-slate-900 font-mono">{formatINR(prod.sellingPrice)}</span>
+                                <button
+                                  type="button"
+                                  tabIndex={-1}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSelectProduct(prod);
+                                  }}
+                                  className="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 active:scale-[0.98] text-white font-semibold text-xs rounded-lg transition-all cursor-pointer shadow-xs flex items-center gap-1"
+                                  title="Add product to cart and set quantity"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>Add</span>
+                                </button>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-3 shrink-0">
-                              <span className="font-bold text-slate-900 font-mono">{formatINR(prod.sellingPrice)}</span>
-                              <button
-                                type="button"
-                                onClick={() => handleAddToCart(prod)}
-                                className="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 active:scale-[0.98] text-white font-semibold text-xs rounded-lg transition-all cursor-pointer shadow-xs flex items-center gap-1"
-                                title="Add product to cart"
-                              >
-                                <Plus className="w-3.5 h-3.5" />
-                                <span>Add</span>
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </>
                   ) : (
@@ -818,7 +1683,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                   ? 'bg-white hover:bg-rose-50 text-slate-700 hover:text-rose-600 border-slate-200 hover:border-rose-200 cursor-pointer active:scale-[0.98]'
                   : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
               }`}
-              title="Clear all products from invoice and start new customer bill"
+              title="Clear all products from invoice and start new customer bill (Alt+X)"
             >
               <Trash2 className={`w-4 h-4 ${cartItems.length > 0 ? 'text-rose-500' : 'text-slate-400'}`} />
               <span>Clear All</span>
@@ -835,7 +1700,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                     key={prod.productId}
                     type="button"
                     id={`btn-recent-prod-${prod.productId}`}
-                    onClick={() => handleAddToCart(prod)}
+                    onClick={() => handleAddToCart(prod, 1, prod.sellingPrice, true)}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-orange-50/60 border border-slate-200 hover:border-orange-300 rounded-xl text-slate-700 hover:text-orange-950 transition-all cursor-pointer shrink-0 shadow-2xs text-xs active:scale-[0.98]"
                     title={`Add ${prod.name} (${formatINR(prod.sellingPrice)})`}
                   >
@@ -855,6 +1720,18 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                 <h2 className="text-sm font-bold text-slate-900">
                   Line Items ({cartItems.length})
                 </h2>
+                <span className="font-mono text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200" title="Jump to Cart Line Items (F3 / Alt+C)">
+                  F3
+                </span>
+                {cartItems.length > 0 && (
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${
+                    billPaperSize === 'a5'
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                      : 'bg-blue-100 text-blue-800 border-blue-200'
+                  }`}>
+                    {billPaperSize.toUpperCase()} Bill
+                  </span>
+                )}
                 {selectedProductIds.length > 0 && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-orange-100 text-orange-800">
                     {selectedProductIds.length} selected
@@ -912,12 +1789,19 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {cartItems.map((item) => {
+                      {cartItems.map((item, index) => {
+                        const isFocused = focusedCartProductId === item.productId;
                         const isSelected = selectedProductIds.includes(item.productId);
                         return (
                           <tr
                             key={item.productId}
-                            className={`transition-colors ${isSelected ? 'bg-orange-50/40' : 'hover:bg-slate-50/60'}`}
+                            className={`transition-colors ${
+                              isFocused
+                                ? 'bg-orange-100/70 ring-1 ring-orange-400'
+                                : isSelected
+                                ? 'bg-orange-50/40'
+                                : 'hover:bg-slate-50/60'
+                            }`}
                           >
                             <td className="py-3 px-3 text-center">
                               <input
@@ -939,33 +1823,82 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                               <input
                                 type="number"
                                 min="0"
+                                id={`input-cart-price-${item.productId}`}
+                                ref={(el) => {
+                                  if (el) cartPriceInputsRef.current.set(item.productId, el);
+                                  else cartPriceInputsRef.current.delete(item.productId);
+                                }}
                                 value={item.unitPrice}
                                 onChange={(e) =>
                                   handleUpdatePrice(item.productId, Number(e.target.value) || 0)
                                 }
+                                onKeyDown={(e) => {
+                                  const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+                                  if (isCmdOrCtrl && e.key === 'Enter') {
+                                    e.preventDefault();
+                                    if (cartItems.length > 0) handlePrintBill();
+                                    return;
+                                  }
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    scrollToTop();
+                                    searchInputRef.current?.focus();
+                                    searchInputRef.current?.select();
+                                  } else if (e.key === 'Escape') {
+                                    e.preventDefault();
+                                    scrollToTop();
+                                    searchInputRef.current?.focus();
+                                  }
+                                }}
                                 className="w-20 px-2 py-1 text-right font-mono font-bold text-slate-900 border border-slate-200 hover:border-slate-300 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/10 rounded-lg bg-white shadow-2xs"
-                                title="Click to override rate for electrician/contractor"
+                                title="Click/Tab to override rate. Press Enter to return to search."
                               />
                             </td>
                             <td className="py-3 px-4">
-                              <div className="flex items-center justify-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => handleUpdateQty(item.productId, -1)}
-                                  className="w-7 h-7 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold flex items-center justify-center transition-all cursor-pointer shadow-2xs active:scale-95"
-                                >
-                                  <Minus className="w-3 h-3" />
-                                </button>
-                                <span className="w-8 text-center font-bold text-slate-900 font-mono text-xs">
-                                  {item.quantity}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleUpdateQty(item.productId, 1)}
-                                  className="w-7 h-7 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold flex items-center justify-center transition-all cursor-pointer shadow-2xs active:scale-95"
-                                >
-                                  <Plus className="w-3 h-3" />
-                                </button>
+                              <div className="flex items-center justify-center">
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  id={`input-cart-qty-${item.productId}`}
+                                  ref={(el) => {
+                                    if (el) cartQtyInputsRef.current.set(item.productId, el);
+                                    else cartQtyInputsRef.current.delete(item.productId);
+                                  }}
+                                  value={qtyDrafts[item.productId] !== undefined ? qtyDrafts[item.productId] : String(item.quantity)}
+                                  onFocus={(e) => {
+                                    e.currentTarget.select();
+                                    setFocusedCartProductId(item.productId);
+                                  }}
+                                  onBlur={() => {
+                                    const raw = qtyDrafts[item.productId];
+                                    if (raw !== undefined) {
+                                      const parsed = parseFloat(raw);
+                                      const safeQty = !isNaN(parsed) && parsed > 0 ? parsed : 1;
+                                      handleSetQty(item.productId, safeQty);
+                                      setQtyDrafts((prev) => {
+                                        const copy = { ...prev };
+                                        delete copy[item.productId];
+                                        return copy;
+                                      });
+                                    }
+                                    setFocusedCartProductId(null);
+                                  }}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    // Allow manual typing: digits, decimal point, or completely empty
+                                    if (raw === '' || /^\d*\.?\d*$/.test(raw)) {
+                                      setQtyDrafts((prev) => ({ ...prev, [item.productId]: raw }));
+                                      const val = parseFloat(raw);
+                                      if (!isNaN(val) && val > 0) {
+                                        handleSetQty(item.productId, val);
+                                      }
+                                    }
+                                  }}
+                                  onKeyDown={(e) => handleCartQtyKeyDown(e, item.productId, index)}
+                                  className="w-20 px-2 py-1.5 text-center font-bold text-slate-900 font-mono text-sm border-2 border-slate-200 hover:border-slate-300 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-lg bg-white shadow-2xs transition-all"
+                                  title="Type quantity directly (manual typing). Press Enter to confirm, ↓/↑ to navigate items"
+                                  placeholder="1"
+                                />
                               </div>
                             </td>
                             {isGstBill && (
@@ -981,7 +1914,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                                 type="button"
                                 onClick={() => handleRemoveItem(item.productId)}
                                 className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                title="Remove item"
+                                title="Remove item (or Alt+Del when on quantity input)"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -1000,36 +1933,66 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
         {/* Right Column: Checkout Panel (~35% width) */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-5">
           {/* Customer Details Form */}
-          <div className="space-y-3 p-4 bg-slate-50/70 rounded-xl border border-slate-200/70">
+          <div ref={customerDetailsSectionRef} className="space-y-3 p-4 bg-slate-50/70 rounded-xl border border-slate-200/70">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  scrollToCustomerDetails();
+                  customerPhoneInputRef.current?.focus();
+                  customerPhoneInputRef.current?.select();
+                }}
+                className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5 hover:text-orange-600 transition-colors cursor-pointer text-left"
+              >
                 <User className="w-3.5 h-3.5 text-slate-500" />
                 <span>Customer Details</span>
                 <span className="text-slate-400 font-normal text-[11px] lowercase">(optional)</span>
-              </label>
-              {selectedCustomerId !== 'new' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedCustomerId('new');
-                    setCustomerName('');
-                    setCustomerPhone('');
-                    setCustomerAddress('');
-                    setCustomerGstin('');
-                    setCustomerCategory('walk-in');
-                  }}
-                  className="text-xs font-semibold text-orange-600 hover:text-orange-700 transition-colors cursor-pointer"
-                >
-                  + New Customer
-                </button>
-              )}
+              </button>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] font-bold text-orange-600 bg-orange-100 px-1.5 py-0.5 rounded border border-orange-200">
+                  F4
+                </span>
+                {selectedCustomerId !== 'new' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCustomerId('new');
+                      setCustomerName('');
+                      setCustomerPhone('');
+                      setCustomerAddress('');
+                      setCustomerGstin('');
+                      setCustomerCategory('walk-in');
+                      scrollToCustomerDetails();
+                      customerPhoneInputRef.current?.focus();
+                    }}
+                    className="text-xs font-semibold text-orange-600 hover:text-orange-700 transition-colors cursor-pointer"
+                  >
+                    + New
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Quick Pick from Existing Customers */}
             <div>
               <select
                 id="select-customer"
+                ref={customerSelectRef}
                 value={selectedCustomerId}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (selectedCustomerId === 'walk-in') {
+                      focusCashTendered();
+                    } else {
+                      customerPhoneInputRef.current?.focus();
+                    }
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    scrollToTop();
+                    searchInputRef.current?.focus();
+                  }
+                }}
                 onChange={(e) => {
                   const val = e.target.value;
                   setSelectedCustomerId(val);
@@ -1039,6 +2002,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                     setCustomerAddress('');
                     setCustomerGstin('');
                     setCustomerCategory('walk-in');
+                    setTimeout(() => customerPhoneInputRef.current?.focus(), 30);
                   } else if (val === 'walk-in') {
                     setCustomerName('');
                     setCustomerPhone('');
@@ -1074,27 +2038,79 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                  Name
+                  Mobile <span className="text-slate-400 font-normal">(F4)</span>
                 </label>
                 <input
-                  type="text"
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  placeholder="Walk-in Customer"
-                  className="w-full px-3 py-1.5 bg-white rounded-lg border border-slate-200 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-orange-500 font-medium"
+                  ref={customerPhoneInputRef}
+                  type="tel"
+                  id="input-customer-phone"
+                  value={customerPhone}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCustomerPhone(val);
+                    // If exact 10 digits or match, check existing customer
+                    const cleanPhone = val.trim().replace(/\D/g, '');
+                    if (cleanPhone.length >= 10) {
+                      const match = customers.find((c) => c.phone && c.phone.replace(/\D/g, '') === cleanPhone);
+                      if (match) {
+                        setSelectedCustomerId(match.customerId);
+                        setCustomerName(match.name);
+                        setCustomerAddress(match.siteAddress || match.address || '');
+                        setCustomerGstin(match.gstin || '');
+                        setCustomerCategory((match.customerType as any) || 'walk-in');
+                        showToast(`Customer identified: ${match.name}`);
+                      }
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (!customerPhone.trim() || customerPhone.trim().toLowerCase() === 'walk-in' || customerName.trim()) {
+                        focusCashTendered();
+                        showToast('Proceeded to Cash Tendered • Press Enter for Discount');
+                      } else {
+                        customerNameInputRef.current?.focus();
+                        customerNameInputRef.current?.select();
+                      }
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      scrollToTop();
+                      searchInputRef.current?.focus();
+                    }
+                  }}
+                  placeholder="10-digit mobile"
+                  className="w-full px-3 py-1.5 bg-white rounded-lg border border-slate-200 text-xs font-mono text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-orange-500 font-medium"
                 />
               </div>
 
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                  Mobile
+                  Name <span className="text-slate-400 font-normal">(Optional)</span>
                 </label>
                 <input
-                  type="tel"
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
-                  placeholder="10-digit mobile"
-                  className="w-full px-3 py-1.5 bg-white rounded-lg border border-slate-200 text-xs font-mono text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-orange-500 font-medium"
+                  ref={customerNameInputRef}
+                  type="text"
+                  id="input-customer-name"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (isGstBill) {
+                        customerAddressInputRef.current?.focus();
+                        customerAddressInputRef.current?.select();
+                      } else {
+                        focusCashTendered();
+                        showToast('Proceeded to Cash Tendered • Press Enter for Discount');
+                      }
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      scrollToTop();
+                      searchInputRef.current?.focus();
+                    }
+                  }}
+                  placeholder="Walk-in Customer"
+                  className="w-full px-3 py-1.5 bg-white rounded-lg border border-slate-200 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-orange-500 font-medium"
                 />
               </div>
             </div>
@@ -1105,9 +2121,27 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                 Site Address
               </label>
               <input
+                ref={customerAddressInputRef}
                 type="text"
+                id="input-customer-address"
                 value={customerAddress}
                 onChange={(e) => setCustomerAddress(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (isGstBill) {
+                      customerGstinInputRef.current?.focus();
+                      customerGstinInputRef.current?.select();
+                    } else {
+                      focusCashTendered();
+                      showToast('Proceeded to Cash Tendered • Press Enter for Discount');
+                    }
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    scrollToTop();
+                    searchInputRef.current?.focus();
+                  }
+                }}
                 placeholder="e.g. Site #14, Royal Garden Apts"
                 className="w-full px-3 py-1.5 bg-white rounded-lg border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-orange-500 font-medium"
               />
@@ -1120,9 +2154,22 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                   GSTIN
                 </label>
                 <input
+                  ref={customerGstinInputRef}
                   type="text"
+                  id="input-customer-gstin"
                   value={customerGstin}
                   onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      focusCashTendered();
+                      showToast('Proceeded to Cash Tendered • Press Enter for Discount');
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      scrollToTop();
+                      searchInputRef.current?.focus();
+                    }
+                  }}
                   placeholder="33AAAAA0000A1Z5"
                   className="w-full px-3 py-1.5 bg-white rounded-lg border border-slate-200 text-xs font-mono uppercase text-slate-900 focus:outline-none focus:border-orange-500 font-medium"
                 />
@@ -1160,67 +2207,102 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
           </div>
 
           {/* Payment Method 2x2 Grid */}
-          <div className="space-y-2">
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-700">Payment Method</label>
+          <div ref={paymentSectionRef} className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-700">Payment Method</label>
+              <span className="font-mono text-[10px] text-slate-400">F7-F10 / Alt+1-4</span>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               {/* Cash */}
               <button
                 type="button"
                 id="btn-pay-cash"
-                onClick={() => setPaymentMethod('cash')}
-                className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                onClick={() => {
+                  focusCashTendered();
+                }}
+                className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-1.5 transition-all cursor-pointer ${
                   paymentMethod === 'cash'
                     ? 'bg-orange-500 text-white font-bold border-orange-500 shadow-xs'
                     : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                <Banknote className="w-4 h-4" />
-                <span>Cash</span>
+                <div className="flex items-center gap-1.5">
+                  <Banknote className="w-4 h-4" />
+                  <span>Cash</span>
+                </div>
+                <span className={`text-[10px] font-mono px-1 rounded ${paymentMethod === 'cash' ? 'bg-orange-600 text-white' : 'text-slate-400 bg-slate-100'}`}>
+                  F7
+                </span>
               </button>
 
               {/* UPI */}
               <button
                 type="button"
                 id="btn-pay-upi"
-                onClick={() => setPaymentMethod('upi')}
-                className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                onClick={() => {
+                  setPaymentMethod('upi');
+                  scrollToBottom();
+                }}
+                className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-1.5 transition-all cursor-pointer ${
                   paymentMethod === 'upi'
                     ? 'bg-orange-500 text-white font-bold border-orange-500 shadow-xs'
                     : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                <Smartphone className="w-4 h-4" />
-                <span>UPI</span>
+                <div className="flex items-center gap-1.5">
+                  <Smartphone className="w-4 h-4" />
+                  <span>UPI</span>
+                </div>
+                <span className={`text-[10px] font-mono px-1 rounded ${paymentMethod === 'upi' ? 'bg-orange-600 text-white' : 'text-slate-400 bg-slate-100'}`}>
+                  F8
+                </span>
               </button>
 
               {/* Card */}
               <button
                 type="button"
                 id="btn-pay-card"
-                onClick={() => setPaymentMethod('card')}
-                className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                onClick={() => {
+                  setPaymentMethod('card');
+                  scrollToBottom();
+                }}
+                className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-1.5 transition-all cursor-pointer ${
                   paymentMethod === 'card'
                     ? 'bg-orange-500 text-white font-bold border-orange-500 shadow-xs'
                     : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                <CreditCard className="w-4 h-4" />
-                <span>Card</span>
+                <div className="flex items-center gap-1.5">
+                  <CreditCard className="w-4 h-4" />
+                  <span>Card</span>
+                </div>
+                <span className={`text-[10px] font-mono px-1 rounded ${paymentMethod === 'card' ? 'bg-orange-600 text-white' : 'text-slate-400 bg-slate-100'}`}>
+                  F9
+                </span>
               </button>
 
               {/* Credit (Due) */}
               <button
                 type="button"
                 id="btn-pay-credit"
-                onClick={() => setPaymentMethod('credit')}
-                className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                onClick={() => {
+                  setPaymentMethod('credit');
+                  scrollToBottom();
+                  setTimeout(() => paymentDueDateInputRef.current?.focus(), 50);
+                }}
+                className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-1.5 transition-all cursor-pointer ${
                   paymentMethod === 'credit'
                     ? 'bg-orange-500 text-white font-bold border-orange-500 shadow-xs'
                     : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                <FileText className="w-4 h-4" />
-                <span>Credit (Due)</span>
+                <div className="flex items-center gap-1.5">
+                  <FileText className="w-4 h-4" />
+                  <span>Credit (Due)</span>
+                </div>
+                <span className={`text-[10px] font-mono px-1 rounded ${paymentMethod === 'credit' ? 'bg-orange-600 text-white' : 'text-slate-400 bg-slate-100'}`}>
+                  F10
+                </span>
               </button>
             </div>
           </div>
@@ -1230,18 +2312,58 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             <div className="bg-orange-50/60 border border-orange-200/80 rounded-xl p-3 space-y-1.5 text-xs">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-orange-950">Cash Tendered (₹)</span>
-                {changeDue > 0 && (
+                {changeDue > 0 ? (
                   <span className="font-bold text-emerald-700 font-mono">
                     Change: {formatINR(changeDue)}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-orange-700 font-medium">
+                    Press <kbd className="font-mono font-bold bg-white/80 px-1 py-0.5 rounded border border-orange-300">Enter</kbd> ➔ Discount
                   </span>
                 )}
               </div>
               <input
-                type="number"
+                ref={cashTenderedInputRef}
+                type="text"
+                inputMode="decimal"
+                id="input-cash-tendered"
                 value={cashTendered}
-                onChange={(e) => setCashTendered(e.target.value)}
-                placeholder={`e.g. ${grandTotal}`}
-                className="w-full px-3 py-2 bg-white border border-orange-300 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-orange-500/20 font-bold"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                    setCashTendered(val);
+                  }
+                }}
+                onFocus={(e) => {
+                  e.target.select();
+                  scrollDownToCashTendered();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    return;
+                  }
+                  const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+                  if (isCmdOrCtrl && (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter')) {
+                    e.preventDefault();
+                    if (cartItems.length > 0) handlePrintBill();
+                    else showToast('Cart is empty. Search products first.');
+                  } else if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+                    e.preventDefault();
+                    focusAndSelectDiscountInput();
+                    if (cashTendered && parseFloat(cashTendered) > 0) {
+                      showToast(`Cash ₹${cashTendered} recorded • Discount selected`);
+                    } else {
+                      showToast('Discount selected • Type discount amount (or press Enter)');
+                    }
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    scrollToTop();
+                    searchInputRef.current?.focus();
+                  }
+                }}
+                placeholder={`Type cash amount (e.g. ${grandTotal}) • Press Enter for Discount`}
+                className="w-full px-3 py-2 bg-white border border-orange-300 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-orange-500/20 font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
             </div>
           )}
@@ -1258,10 +2380,28 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               </div>
 
               <input
+                ref={paymentDueDateInputRef}
                 type="date"
                 required
+                id="input-payment-due-date"
                 value={paymentDueDate}
                 onChange={(e) => setPaymentDueDate(e.target.value)}
+                onKeyDown={(e) => {
+                  const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+                  if (isCmdOrCtrl && (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter')) {
+                    e.preventDefault();
+                    if (cartItems.length > 0) handlePrintBill();
+                    else showToast('Cart is empty. Search products first.');
+                  } else if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+                    e.preventDefault();
+                    focusAndSelectDiscountInput();
+                    showToast('Due date saved • Discount selected');
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    scrollToTop();
+                    searchInputRef.current?.focus();
+                  }
+                }}
                 className="w-full px-3 py-2 bg-white border border-orange-300 rounded-lg text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 font-bold"
               />
 
@@ -1291,6 +2431,9 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             <div className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-2">
                 <span className="text-slate-700 font-semibold uppercase text-[11px] tracking-wider">Discount</span>
+                <span className="font-mono text-[10px] font-bold text-orange-600 bg-orange-100 px-1.5 py-0.5 rounded border border-orange-200">
+                  Alt+D
+                </span>
                 {/* Segmented Mode Switcher */}
                 <div className="inline-flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
                   <button
@@ -1336,22 +2479,48 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               </span>
             </div>
 
-            {/* Input Field based on Mode */}
+            {/* Input Field based on Mode (Direct manual typing only) */}
             {discountType === 'amount' ? (
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 pointer-events-none">
                   ₹
                 </span>
                 <input
+                  ref={discountAmountInputRef}
                   id="input-discount-amount"
-                  type="number"
-                  min="0"
-                  max={subtotal > 0 ? subtotal : undefined}
-                  step="any"
+                  type="text"
+                  inputMode="decimal"
                   value={discountAmountInput}
-                  onChange={(e) => setDiscountAmountInput(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                      setDiscountAmountInput(val);
+                    }
+                  }}
+                  onFocus={(e) => e.target.select()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      return;
+                    }
+                    const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+                    if (isCmdOrCtrl && (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter')) {
+                      e.preventDefault();
+                      if (cartItems.length > 0) handlePrintBill();
+                      else showToast('Cart is empty. Search products first.');
+                      return;
+                    }
+                    if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+                      e.preventDefault();
+                      showToast(parseFloat(discountAmountInput) > 0 ? `Discount ₹${discountAmountInput} applied • Ctrl+Enter to Print` : 'Discount saved • Ctrl+Enter to Print');
+                      searchInputRef.current?.focus();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      searchInputRef.current?.focus();
+                    }
+                  }}
                   placeholder="0.00"
-                  className="w-full pl-7 pr-10 py-2 bg-white rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-orange-500 font-mono font-bold shadow-2xs"
+                  className="w-full pl-7 pr-10 py-2 bg-white rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-orange-500 font-mono font-bold shadow-2xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                 />
                 {discountAmountInput !== '' && parseFloat(discountAmountInput) > 0 && (
                   <button
@@ -1367,15 +2536,44 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             ) : (
               <div className="relative">
                 <input
+                  ref={discountPercentInputRef}
                   id="input-discount-percent"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="any"
+                  type="text"
+                  inputMode="decimal"
                   value={discountPercentInput}
-                  onChange={(e) => setDiscountPercentInput(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                      const num = parseFloat(val);
+                      if (val === '' || (!isNaN(num) && num <= 100)) {
+                        setDiscountPercentInput(val);
+                      }
+                    }
+                  }}
+                  onFocus={(e) => e.target.select()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      return;
+                    }
+                    const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+                    if (isCmdOrCtrl && (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter')) {
+                      e.preventDefault();
+                      if (cartItems.length > 0) handlePrintBill();
+                      else showToast('Cart is empty. Search products first.');
+                      return;
+                    }
+                    if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+                      e.preventDefault();
+                      showToast(parseFloat(discountPercentInput) > 0 ? `Discount ${discountPercentInput}% applied • Ctrl+Enter to Print` : 'Discount saved • Ctrl+Enter to Print');
+                      searchInputRef.current?.focus();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      searchInputRef.current?.focus();
+                    }
+                  }}
                   placeholder="0"
-                  className="w-full px-3 pr-10 py-2 bg-white rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-orange-500 font-mono font-bold shadow-2xs"
+                  className="w-full px-3 pr-10 py-2 bg-white rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-orange-500 font-mono font-bold shadow-2xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                 />
                 <span className="absolute right-7 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 pointer-events-none">
                   %
@@ -1393,63 +2591,22 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               </div>
             )}
 
-            {/* Quick preset chips */}
-            <div className="flex items-center gap-1.5 pt-0.5">
-              <span className="text-[11px] text-slate-400 font-medium mr-0.5">Presets:</span>
-              {discountType === 'amount' ? (
-                <>
-                  {[20, 50, 100, 200, 500].map((amt) => (
-                    <button
-                      key={amt}
-                      type="button"
-                      onClick={() => setDiscountAmountInput(String(amt))}
-                      className={`px-2.5 py-1 text-xs font-mono rounded-lg border transition-all cursor-pointer ${
-                        parseFloat(discountAmountInput) === amt
-                          ? 'bg-slate-900 text-white font-bold border-slate-900'
-                          : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
-                      }`}
-                    >
-                      ₹{amt}
-                    </button>
-                  ))}
-                  {discountAmountInput !== '' && (
-                    <button
-                      type="button"
-                      onClick={() => setDiscountAmountInput('')}
-                      className="px-2 py-1 text-xs text-rose-600 hover:text-rose-800 font-semibold ml-auto cursor-pointer"
-                    >
-                      Reset
-                    </button>
-                  )}
-                </>
-              ) : (
-                <>
-                  {[2, 5, 10, 15, 20].map((pct) => (
-                    <button
-                      key={pct}
-                      type="button"
-                      onClick={() => setDiscountPercentInput(String(pct))}
-                      className={`px-2.5 py-1 text-xs font-mono rounded-lg border transition-all cursor-pointer ${
-                        parseFloat(discountPercentInput) === pct
-                          ? 'bg-slate-900 text-white font-bold border-slate-900'
-                          : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
-                      }`}
-                    >
-                      {pct}%
-                    </button>
-                  ))}
-                  {discountPercentInput !== '' && (
-                    <button
-                      type="button"
-                      onClick={() => setDiscountPercentInput('')}
-                      className="px-2 py-1 text-xs text-rose-600 hover:text-rose-800 font-semibold ml-auto cursor-pointer"
-                    >
-                      Reset
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
+            {/* Clear Discount button if discount is entered */}
+            {((discountType === 'amount' && discountAmountInput !== '') ||
+              (discountType === 'percentage' && discountPercentInput !== '')) && (
+              <div className="flex items-center justify-end pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDiscountAmountInput('');
+                    setDiscountPercentInput('');
+                  }}
+                  className="px-2 py-0.5 text-xs text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
+                >
+                  Clear Discount
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Tax Breakdown Lines */}
@@ -1485,55 +2642,313 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             </span>
           </div>
 
-          {/* Active Printer Notice */}
-          <div className="flex items-center justify-between text-xs bg-slate-50 px-3 py-2 rounded-xl border border-slate-200/70 text-slate-600 font-medium">
-            <span className="flex items-center gap-1.5">
-              <Printer className="w-3.5 h-3.5 text-slate-500" />
-              <span>Printer:</span>
-            </span>
-            <span className="font-semibold text-slate-800">
-              {settings.defaultPrinterType === 'thermal'
-                ? `Thermal (${settings.thermalPaperWidth || '80mm'})`
-                : 'Ink Printer (A4)'}
-            </span>
+          {/* Simple A4 & A5 Paper Size Selection */}
+          <div ref={sizeAndPrintSectionRef} className="space-y-1.5 pt-1">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-semibold text-slate-700">Paper Format</span>
+              <span className="text-[10px] text-slate-400">
+                Print Size
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                id="btn-bill-size-a4"
+                onClick={() => {
+                  setBillPaperSize('a4');
+                  scrollToBottom();
+                }}
+                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-between gap-1.5 transition-all cursor-pointer border ${
+                  billPaperSize === 'a4'
+                    ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                }`}
+                title="A4 Full Sheet Bill (Alt+4)"
+              >
+                <div className="flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>A4</span>
+                </div>
+                <span className="text-[10px] font-mono opacity-70">Alt+4</span>
+              </button>
+              <button
+                type="button"
+                id="btn-bill-size-a5"
+                onClick={() => {
+                  setBillPaperSize('a5');
+                  scrollToBottom();
+                }}
+                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-between gap-1.5 transition-all cursor-pointer border ${
+                  billPaperSize === 'a5'
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                }`}
+                title="A5 Half Sheet Bill (Alt+5)"
+              >
+                <div className="flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>A5</span>
+                </div>
+                <span className="text-[10px] font-mono opacity-80">Alt+5</span>
+              </button>
+            </div>
           </div>
 
-          {/* Complete Bill & Print Bill Actions */}
+          {/* Print Bill & Hold Bill Actions */}
           <div className="pt-2 space-y-2.5">
             <button
-              type="button"
-              id="btn-complete-bill"
-              disabled={cartItems.length === 0}
-              onClick={handleCompleteSale}
-              className={`w-full py-3.5 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-md ${
-                cartItems.length > 0
-                  ? 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white cursor-pointer hover:shadow-lg'
-                  : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
-              }`}
-              title="Complete bill & record sale in history (F9)"
-            >
-              <CheckCircle2 className="w-4 h-4 text-white shrink-0" />
-              <span>Complete Bill</span>
-            </button>
-
-            <button
+              ref={printBillBtnRef}
               type="button"
               id="btn-print-bill"
               disabled={cartItems.length === 0}
               onClick={handlePrintBill}
-              className={`w-full py-3.5 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-md ${
+              className={`w-full py-4 px-4 rounded-xl font-bold text-base flex items-center justify-center gap-2.5 transition-all shadow-md ${
                 cartItems.length > 0
-                  ? 'bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white cursor-pointer hover:shadow-lg'
+                  ? 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white cursor-pointer hover:shadow-lg'
                   : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
               }`}
-              title="Print bill invoice (Ctrl + P)"
+              title="Print bill, record sale in history & clear for next invoice (Ctrl+Enter)"
             >
-              <Printer className="w-4 h-4 text-white shrink-0" />
+              <Printer className="w-5 h-5 text-white shrink-0" />
               <span>Print Bill</span>
+              <span className="text-xs font-mono font-bold bg-emerald-800/80 px-2 py-0.5 rounded text-emerald-100 ml-1">
+                Ctrl+↵
+              </span>
+            </button>
+
+            {/* 1-Click Hold Bill & Start Blank Bill for Next Customer */}
+            <button
+              type="button"
+              id="btn-sidebar-hold-bill"
+              disabled={cartItems.length === 0}
+              onClick={handleHoldAndNewBill}
+              className={`w-full py-3 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all border shadow-2xs ${
+                cartItems.length > 0
+                  ? 'bg-amber-500 hover:bg-amber-600 active:scale-[0.99] text-slate-950 border-amber-600/40 cursor-pointer shadow-amber-500/20'
+                  : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+              }`}
+              title="1-Click: Hold current bill and open fresh bill for next customer (F6)"
+            >
+              <Pause className="w-4 h-4 fill-current shrink-0" />
+              <span>Hold & New Bill</span>
+              <span className="text-[11px] font-mono font-bold bg-amber-600/60 px-1.5 py-0.5 rounded text-amber-950">
+                F6
+              </span>
             </button>
           </div>
         </div>
       </div>
+
+      {/* POS Keyboard Shortcuts Quick Reference Guide Modal (F1) */}
+      {showShortcutsHelp && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Keyboard className="w-5 h-5 text-orange-400" />
+                <h3 className="font-bold text-base text-white">Full Keyboard POS Speed Billing Guide</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowShortcutsHelp(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-y-auto text-xs text-slate-700">
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 text-orange-950">
+                <p className="font-bold text-xs flex items-center gap-1.5 mb-1">
+                  ⚡ 100% Zero-Mouse POS Workflow:
+                </p>
+                <p className="text-[11px] leading-relaxed text-orange-900">
+                  You can create entire bills, add products, adjust quantities, enter customer mobile, and print invoices without touching the cursor or mouse once!
+                </p>
+              </div>
+
+              {/* Table of Shortcuts */}
+              <div className="space-y-3">
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="bg-slate-100/80 px-3 py-1.5 font-bold text-slate-900 uppercase text-[10px] tracking-wider border-b border-slate-200">
+                    1. Product Search & Adding
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Focus Product Search bar</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        F2 or Ctrl+F or /
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Jump from Search bar to edit Cart Item Quantity</span>
+                      <kbd className="font-mono font-bold bg-orange-100 text-orange-800 px-2 py-0.5 rounded border border-orange-300">
+                        ↓ Down Arrow (when search empty)
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Navigate search results list</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        ↑ Up / ↓ Down
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span className="font-semibold text-orange-950">Add highlighted product & jump to Quantity</span>
+                      <kbd className="font-mono font-bold bg-orange-500 text-white px-2 py-0.5 rounded">
+                        ↵ Enter
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Close search results dropdown</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        Escape
+                      </kbd>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="bg-slate-100/80 px-3 py-1.5 font-bold text-slate-900 uppercase text-[10px] tracking-wider border-b border-slate-200">
+                    2. Selecting & Adjusting Quantity
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Manual Quantity Typing</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        Type numbers directly / Backspace
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span className="font-semibold text-orange-950">Confirm Quantity & jump back to Search next item</span>
+                      <kbd className="font-mono font-bold bg-orange-500 text-white px-2 py-0.5 rounded">
+                        ↵ Enter
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Switch between cart item quantity inputs</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        ↑ / ↓ Arrow keys
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Delete item while on quantity field</span>
+                      <kbd className="font-mono font-bold bg-rose-50 text-rose-700 px-2 py-0.5 rounded border border-rose-200">
+                        Alt + Delete / Backspace
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Tab to Unit Price (Special Contractor Rate)</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        Tab
+                      </kbd>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="bg-slate-100/80 px-3 py-1.5 font-bold text-slate-900 uppercase text-[10px] tracking-wider border-b border-slate-200">
+                    3. Customer Details & Billing Info
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Jump to Customer Details</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        F4 or Alt+K
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Advance through fields (Mobile → Name → Address → GSTIN → Payment)</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        ↵ Enter
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Return from customer fields back to product search</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        Escape
+                      </kbd>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="bg-slate-100/80 px-3 py-1.5 font-bold text-slate-900 uppercase text-[10px] tracking-wider border-b border-slate-200">
+                    4. Payment, Formats & Printing
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Cash Payment & enter Cash Tendered</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        F7 or Alt+1
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>UPI / QR Payment</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        F8 or Alt+2
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Card Payment</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        F9 or Alt+3
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Credit (Khata Due) & Due Date</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        F10
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Enter Discount amount/percent</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        Alt+D
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Select A4 / A5 Paper Size</span>
+                      <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
+                        Alt+4 / Alt+5
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span className="font-bold text-emerald-800">Print Bill & Finalize Invoice</span>
+                      <kbd className="font-mono font-bold bg-emerald-600 text-white px-2 py-0.5 rounded">
+                        Ctrl+Enter (or ⌘+Enter)
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span className="font-bold text-amber-800">1-Click Hold Bill & Start Blank Bill</span>
+                      <kbd className="font-mono font-bold bg-amber-500 text-black px-2 py-0.5 rounded">
+                        F6
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span>Clear Bill / Discard items</span>
+                      <kbd className="font-mono font-bold bg-rose-100 text-rose-800 px-2 py-0.5 rounded border border-rose-300">
+                        Alt+X
+                      </kbd>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setShowShortcutsHelp(false)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition-colors cursor-pointer"
+              >
+                Got It (Esc)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+export default BillingScreen;

@@ -72,17 +72,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <img
             id="sidebar-brand-logo"
             src={getShopLogoUrl(settings)}
-            alt="Sri Senthur Velan Electricals and Pipes Logo"
+            alt={`${settings.shopName || 'Store'} Logo`}
             className="max-w-[48px] max-h-[64px] object-contain"
             referrerPolicy="no-referrer"
           />
         </div>
         <div className="min-w-0 flex-1">
-          <h1 className="font-bold text-xs sm:text-sm text-slate-900 tracking-tight leading-snug">
-            Sri Senthur Velan
+          <h1
+            className="font-bold text-xs sm:text-sm text-slate-900 tracking-tight leading-snug truncate"
+            title={settings.shopName}
+          >
+            {settings.shopName || 'Store'}
           </h1>
-          <p className="text-[11px] text-slate-500 font-medium leading-tight mt-0.5 truncate">
-            Electricals & Pipes
+          <p
+            className="text-[11px] text-slate-500 font-medium leading-tight mt-0.5 truncate"
+            title={settings.tagline}
+          >
+            {settings.tagline || 'Retail & Wholesale'}
           </p>
         </div>
       </div>
@@ -197,15 +203,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <Menu className="w-5 h-5" />
         </button>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
           <img
             src={getShopLogoUrl(settings)}
-            alt="Sri Senthur Velan Logo"
+            alt={`${settings.shopName || 'Store'} Logo`}
             className="w-7 h-9 object-contain shrink-0"
             referrerPolicy="no-referrer"
           />
-          <span className="font-bold text-sm text-slate-900 tracking-tight">
-            Sri Senthur Velan
+          <span className="font-bold text-sm text-slate-900 tracking-tight truncate max-w-[160px]">
+            {settings.shopName || 'Store'}
           </span>
         </div>
 
