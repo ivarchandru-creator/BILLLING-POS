@@ -175,7 +175,6 @@ export interface DraftBillingState {
 
 export interface HeldInvoice {
   id: string;
-  holdNumber: number;
   heldAt: string;
   customerName: string;
   customerPhone: string;

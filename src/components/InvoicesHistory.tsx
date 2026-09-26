@@ -13,6 +13,7 @@ import {
   Calendar,
   RotateCcw,
   TrendingUp,
+  Trash2,
 } from 'lucide-react';
 import { Invoice, ShopSettings, Product, InvoiceItem } from '../types';
 import {
@@ -32,6 +33,7 @@ interface InvoicesHistoryProps {
   products?: Product[];
   onPrintInvoice: (invoice: Invoice) => void;
   onMarkCreditPaid?: (invoiceId: string) => void;
+  onDeleteInvoice?: (invoiceId: string) => void;
 }
 
 type DatePreset = 'all' | 'today' | 'yesterday' | '7days' | 'this_month' | 'last_month' | 'custom';
@@ -49,10 +51,12 @@ export const InvoicesHistory: React.FC<InvoicesHistoryProps> = ({
   products = [],
   onPrintInvoice,
   onMarkCreditPaid,
+  onDeleteInvoice,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [paymentFilter, setPaymentFilter] = useState('all');
   const [showPrintReportModal, setShowPrintReportModal] = useState(false);
+  const [invoiceToDelete, setInvoiceToDelete] = useState<Invoice | null>(null);
 
   // Map of productId / name to purchasePrice / costPrice
   const productCostMap = useMemo(() => {
@@ -714,6 +718,19 @@ export const InvoicesHistory: React.FC<InvoicesHistoryProps> = ({
                                 <span className="hidden sm:inline">Paid</span>
                               </button>
                             )}
+
+                            {/* Delete Invoice Button */}
+                            {onDeleteInvoice && (
+                              <button
+                                type="button"
+                                id={`btn-delete-invoice-${inv.invoiceId}`}
+                                onClick={() => setInvoiceToDelete(inv)}
+                                className="p-1.5 text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
+                                title="Delete invoice, restore stock & reverse revenue"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -725,6 +742,81 @@ export const InvoicesHistory: React.FC<InvoicesHistoryProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {invoiceToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-fadeIn">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-slate-100 overflow-hidden">
+            <div className="p-6">
+              <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 mx-auto mb-4">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-bold text-slate-900 text-center">
+                Delete Bill #{invoiceToDelete.invoiceNumber}?
+              </h3>
+              <p className="text-xs text-slate-500 text-center mt-1">
+                This action cannot be undone. Reversing this sale will perform the following updates:
+              </p>
+
+              <div className="bg-slate-50 rounded-xl p-3.5 mt-4 space-y-2 text-xs text-slate-700 border border-slate-100">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Customer:</span>
+                  <span className="font-semibold text-slate-900">{invoiceToDelete.customerName || 'Walk-in Customer'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Grand Total:</span>
+                  <span className="font-mono font-bold text-slate-900">{formatINR(invoiceToDelete.grandTotal)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Payment Type:</span>
+                  <span className="font-semibold capitalize text-slate-900">{invoiceToDelete.paymentMethod}</span>
+                </div>
+
+                <div className="border-t border-slate-200 pt-2 mt-2">
+                  <span className="font-semibold text-slate-800 block mb-1">Items to restore to inventory:</span>
+                  <ul className="space-y-1 max-h-32 overflow-y-auto">
+                    {invoiceToDelete.items.map((item, idx) => (
+                      <li key={idx} className="flex justify-between text-[11px] text-slate-600">
+                        <span>• {item.productNameSnapshot || (item as any).name || 'Product'}</span>
+                        <span className="font-mono font-semibold text-emerald-700">+{item.quantity} {item.unit || 'pcs'}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                {invoiceToDelete.paymentMethod === 'credit' && !invoiceToDelete.creditPaid && (
+                  <div className="border-t border-slate-200 pt-2 mt-2 text-[11px] text-amber-800 font-medium bg-amber-50 p-2 rounded">
+                    ⚠️ Pending credit balance of {formatINR(invoiceToDelete.grandTotal)} will be deducted from customer account.
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setInvoiceToDelete(null)}
+                  className="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onDeleteInvoice) {
+                      onDeleteInvoice(invoiceToDelete.invoiceId);
+                    }
+                    setInvoiceToDelete(null);
+                  }}
+                  className="flex-1 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition-colors shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Confirm Delete</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Print Sales Report Modal */}
       {showPrintReportModal && (

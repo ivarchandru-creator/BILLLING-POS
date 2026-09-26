@@ -50,7 +50,7 @@ interface BillingScreenProps {
   settings: ShopSettings;
   customers?: Customer[];
   onSaveInvoice: (invoice: Invoice) => void;
-  onPreviewInvoice: (invoice: Invoice) => void;
+  onPreviewInvoice: (invoice: Invoice, onConfirm?: () => void) => void;
   onAddCustomer?: (customer: Customer) => void;
   onCartCountChange?: (count: number) => void;
 }
@@ -70,6 +70,10 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [activeSearchIndex, setActiveSearchIndex] = useState<number>(0);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState<boolean>(false);
+  const [customerSearchQuery, setCustomerSearchQuery] = useState<string>('');
+  const [isCustomerSearchOpen, setIsCustomerSearchOpen] = useState<boolean>(false);
+  const [activeCustomerSearchIndex, setActiveCustomerSearchIndex] = useState<number>(0);
+  const customerSearchDropdownRef = useRef<HTMLDivElement>(null);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
@@ -83,7 +87,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   const sizeAndPrintSectionRef = useRef<HTMLDivElement>(null);
   const printBillBtnRef = useRef<HTMLButtonElement>(null);
 
-  const customerSelectRef = useRef<HTMLSelectElement>(null);
+  const customerSearchInputRef = useRef<HTMLInputElement>(null);
   const customerPhoneInputRef = useRef<HTMLInputElement>(null);
   const customerNameInputRef = useRef<HTMLInputElement>(null);
   const customerAddressInputRef = useRef<HTMLInputElement>(null);
@@ -501,9 +505,9 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       ) {
         e.preventDefault();
         scrollToCustomerDetails();
-        customerPhoneInputRef.current?.focus();
-        customerPhoneInputRef.current?.select();
-        showToast('Customer Details (Enter mobile or name)');
+        customerSearchInputRef.current?.focus();
+        customerSearchInputRef.current?.select();
+        showToast('Customer Search (Type or press Enter to continue)');
         return;
       }
 
@@ -578,11 +582,28 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       if (e.key === 'F10') {
         e.preventDefault();
         setPaymentMethod('credit');
-        showToast('Payment mode: Credit (Due)');
-        scrollToBottom();
-        setTimeout(() => {
-          paymentDueDateInputRef.current?.focus();
-        }, 50);
+        const trimmedName = customerName.trim();
+        const isGenericWalkIn = !trimmedName || trimmedName === 'Walk-in Customer (General)' || trimmedName === 'Walk-in Customer';
+        const cleanPhone = customerPhone.trim().replace(/\D/g, '');
+        const isMissingPhone = !customerPhone.trim() || cleanPhone.length < 10;
+
+        if (isGenericWalkIn || isMissingPhone) {
+          scrollToCustomerDetails();
+          if (isGenericWalkIn) {
+            customerSearchInputRef.current?.focus();
+            customerSearchInputRef.current?.select();
+          } else {
+            customerPhoneInputRef.current?.focus();
+            customerPhoneInputRef.current?.select();
+          }
+          showToast('Customer Name & Mobile Number required for Credit bills');
+        } else {
+          showToast('Payment mode: Credit (Due)');
+          scrollToBottom();
+          setTimeout(() => {
+            paymentDueDateInputRef.current?.focus();
+          }, 50);
+        }
         return;
       }
 
@@ -1078,13 +1099,10 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       return;
     }
 
-    const existingMaxHoldNum = heldInvoices.reduce((max, h) => Math.max(max, h.holdNumber || 0), 0);
-    const nextHoldNumber = existingMaxHoldNum + 1;
     const currentDisplayName = customerName.trim() || 'Walk-in Customer';
 
     const newHeld: HeldInvoice = {
       id: `held-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      holdNumber: nextHoldNumber,
       heldAt: new Date().toISOString(),
       customerName: currentDisplayName,
       customerPhone: customerPhone.trim(),
@@ -1129,7 +1147,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     setCustomerCategory('walk-in');
     setIsGstBill(settings.defaultGstOn ?? false);
 
-    showToast(`Bill #${newHeld.holdNumber} (${newHeld.customerName}) held! Blank bill ready.`);
+    showToast(`Bill (${newHeld.customerName}) held! Blank bill ready.`);
     setTimeout(() => searchInputRef.current?.focus(), 50);
   };
 
@@ -1143,11 +1161,9 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     // If current on-screen bill has items, safely auto-hold it so switching is 100% loss-free
     let remainingHeld = heldInvoices.filter((h) => h.id !== heldId);
     if (cartItems.length > 0) {
-      const existingMaxHoldNum = heldInvoices.reduce((max, h) => Math.max(max, h.holdNumber || 0), 0);
       const currentDisplayName = customerName.trim() || 'Walk-in Customer';
       const autoHeldCurrent: HeldInvoice = {
         id: `held-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        holdNumber: existingMaxHoldNum + 1,
         heldAt: new Date().toISOString(),
         customerName: currentDisplayName,
         customerPhone: customerPhone.trim(),
@@ -1275,51 +1291,78 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     };
   };
 
-  // Print Bill & Record Sale:
-  // When Print Bill is clicked:
-  // 1. Records the sale in Sales History & updates inventory stock
-  // 2. Opens the printable invoice preview
-  // 3. Clears all old invoice products and resets the screen, ready for the next invoice!
-  // Note: Customer name and mobile number are 100% OPTIONAL and never block printing.
+  // Print Bill & Record Sale Flow:
+  // 1st click on Print Bill (or Ctrl+Enter):
+  // - Opens the printable bill preview popup modal.
+  // - The cart & added products remain INTACT on the billing screen (NOT cleared yet).
+  // 2nd click on the Print Bill button inside the popup modal:
+  // - Prints the invoice.
+  // - ONLY THEN: Saves the invoice in sales history & inventory, and refreshes the cart to empty!
   const handlePrintBill = () => {
     if (cartItems.length === 0) {
       showToast('Cart is empty. Please add products to print bill.');
       return;
     }
 
+    // Credit Payment Validation: Customer Name & Mobile Number are mandatory for Credit (Due) bills
+    if (paymentMethod === 'credit') {
+      const trimmedName = customerName.trim();
+      const isGenericWalkIn = !trimmedName || trimmedName === 'Walk-in Customer (General)' || trimmedName === 'Walk-in Customer';
+      const cleanPhone = customerPhone.trim().replace(/\D/g, '');
+      const isMissingPhone = !customerPhone.trim() || cleanPhone.length < 10;
+
+      if (isGenericWalkIn || isMissingPhone) {
+        showToast('Cannot print Credit bill: Customer Name and Mobile Number are required!');
+        scrollToCustomerDetails();
+        if (isGenericWalkIn) {
+          customerSearchInputRef.current?.focus();
+          customerSearchInputRef.current?.select();
+        } else {
+          customerPhoneInputRef.current?.focus();
+          customerPhoneInputRef.current?.select();
+        }
+        return; // Strictly block printing
+      }
+    }
+
     const invoiceToSave = buildCurrentInvoice();
 
-    // 1. Record the sale in Sales History & update inventory stock
-    onSaveInvoice(invoiceToSave);
+    // 1. Open printable invoice preview modal with onConfirm callback.
+    // Notice: Cart is NOT cleared here! Products remain in the cart.
+    onPreviewInvoice(invoiceToSave, () => {
+      // 2. This callback runs ONLY when user clicks Print in the popup modal!
+      onSaveInvoice(invoiceToSave);
 
-    // 2. Open printable invoice preview modal
-    onPreviewInvoice(invoiceToSave);
+      // Empty the cart and refresh for next bill
+      setCartItems([]);
+      setSelectedProductIds([]);
+      clearDraftBilling();
+      setActiveInvoiceSession(null);
+      setDiscountType('amount');
+      setDiscountAmountInput('');
+      setDiscountPercentInput('');
+      setCashTendered('');
+      setSelectedCustomerId('walk-in');
+      setCustomerName('');
+      setCustomerPhone('');
+      setCustomerAddress('');
+      setCustomerGstin('');
+      setCustomerCategory('walk-in');
+      setCustomerSearchQuery('');
+      setIsCustomerSearchOpen(false);
+      setPaymentMethod('cash');
+      setPaymentDueDate('');
+      setIsGstBill(settings.defaultGstOn ?? false);
 
-    // 3. Clear all old invoice products and reset screen, ready for creating next invoice
-    setCartItems([]);
-    setSelectedProductIds([]);
-    clearDraftBilling();
-    setActiveInvoiceSession(null);
-    setDiscountType('amount');
-    setDiscountAmountInput('');
-    setDiscountPercentInput('');
-    setCashTendered('');
-    setSelectedCustomerId('walk-in');
-    setCustomerName('');
-    setCustomerPhone('');
-    setCustomerAddress('');
-    setCustomerGstin('');
-    setCustomerCategory('walk-in');
-    setPaymentMethod('cash');
-    setPaymentDueDate('');
-    setIsGstBill(settings.defaultGstOn ?? false);
-
-    showToast(`Bill #${invoiceToSave.invoiceNumber} recorded & printed! Ready for next invoice.`);
-    scrollToTop();
-    setTimeout(() => {
+      showToast(`Bill #${invoiceToSave.invoiceNumber} recorded & printed! Cart refreshed.`);
       scrollToTop();
-      searchInputRef.current?.focus();
-    }, 100);
+      setTimeout(() => {
+        scrollToTop();
+        searchInputRef.current?.focus();
+      }, 100);
+    });
+
+    showToast(`Bill #${invoiceToSave.invoiceNumber} preview opened. Click Print Bill in popup to print.`);
   };
 
   handlePrintBillRef.current = handlePrintBill;
@@ -1429,7 +1472,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               title={`Switch back to held bill for ${held.customerName}`}
             >
               <Pause className="w-3 h-3 text-amber-700 fill-current" />
-              <span className="font-semibold text-amber-900">Hold #{held.holdNumber}:</span>
+              <span className="font-semibold text-amber-900">Hold:</span>
               <span className="max-w-[120px] truncate">{held.customerName}</span>
               <span className="font-mono text-amber-800 font-bold text-[11px]">
                 ({formatINR(held.grandTotal)})
@@ -1939,8 +1982,8 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                 type="button"
                 onClick={() => {
                   scrollToCustomerDetails();
-                  customerPhoneInputRef.current?.focus();
-                  customerPhoneInputRef.current?.select();
+                  customerSearchInputRef.current?.focus();
+                  customerSearchInputRef.current?.select();
                 }}
                 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5 hover:text-orange-600 transition-colors cursor-pointer text-left"
               >
@@ -1962,8 +2005,11 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                       setCustomerAddress('');
                       setCustomerGstin('');
                       setCustomerCategory('walk-in');
+                      setCustomerSearchQuery('');
+                      setIsCustomerSearchOpen(false);
                       scrollToCustomerDetails();
-                      customerPhoneInputRef.current?.focus();
+                      customerSearchInputRef.current?.focus();
+                      customerSearchInputRef.current?.select();
                     }}
                     className="text-xs font-semibold text-orange-600 hover:text-orange-700 transition-colors cursor-pointer"
                   >
@@ -1973,72 +2019,154 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               </div>
             </div>
 
-            {/* Quick Pick from Existing Customers */}
-            <div>
-              <select
-                id="select-customer"
-                ref={customerSelectRef}
-                value={selectedCustomerId}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    if (selectedCustomerId === 'walk-in') {
-                      focusCashTendered();
-                    } else {
-                      customerPhoneInputRef.current?.focus();
+            {/* Customer Search & New Customer Flow */}
+            <div className="space-y-1.5 relative">
+              <label className="block text-[11px] font-semibold text-slate-600">
+                Customer Search / New <span className="text-slate-400 font-normal">(F4)</span>
+              </label>
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  id="input-customer-quick-search"
+                  ref={customerSearchInputRef}
+                  value={customerSearchQuery}
+                  onChange={(e) => {
+                    const q = e.target.value;
+                    setCustomerSearchQuery(q);
+                    setIsCustomerSearchOpen(true);
+                    setActiveCustomerSearchIndex(0);
+                  }}
+                  onFocus={(e) => {
+                    e.target.select();
+                    if (customerSearchQuery.trim().length > 0) {
+                      setIsCustomerSearchOpen(true);
                     }
-                  } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    scrollToTop();
-                    searchInputRef.current?.focus();
-                  }
-                }}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setSelectedCustomerId(val);
-                  if (val === 'new') {
-                    setCustomerName('');
-                    setCustomerPhone('');
-                    setCustomerAddress('');
-                    setCustomerGstin('');
-                    setCustomerCategory('walk-in');
-                    setTimeout(() => customerPhoneInputRef.current?.focus(), 30);
-                  } else if (val === 'walk-in') {
-                    setCustomerName('');
-                    setCustomerPhone('');
-                    setCustomerAddress('');
-                    setCustomerGstin('');
-                    setCustomerCategory('walk-in');
-                  } else {
-                    const found = customers.find((c) => c.customerId === val);
-                    if (found) {
-                      setCustomerName(found.name);
-                      setCustomerPhone(found.phone || '');
-                      setCustomerAddress(found.siteAddress || found.address || '');
-                      setCustomerGstin(found.gstin || '');
-                      setCustomerCategory((found.customerType as any) || 'walk-in');
+                  }}
+                  onKeyDown={(e) => {
+                    const filteredCusts = customers.filter((c) => {
+                      if (c.customerId === 'cust-1') return false;
+                      if (!customerSearchQuery.trim()) return false;
+                      const q = customerSearchQuery.toLowerCase();
+                      return c.name?.toLowerCase().includes(q) || c.phone?.toLowerCase().includes(q);
+                    });
+
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      if (filteredCusts.length > 0) {
+                        setIsCustomerSearchOpen(true);
+                        setActiveCustomerSearchIndex((prev) => (prev + 1) % filteredCusts.length);
+                      }
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      if (filteredCusts.length > 0) {
+                        setIsCustomerSearchOpen(true);
+                        setActiveCustomerSearchIndex((prev) => (prev - 1 + filteredCusts.length) % filteredCusts.length);
+                      }
+                    } else if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (isCustomerSearchOpen && filteredCusts.length > 0) {
+                        const selected = filteredCusts[activeCustomerSearchIndex] || filteredCusts[0];
+                        if (selected) {
+                          setSelectedCustomerId(selected.customerId);
+                          setCustomerName(selected.name);
+                          setCustomerPhone(selected.phone || '');
+                          setCustomerAddress(selected.siteAddress || selected.address || '');
+                          setCustomerGstin(selected.gstin || '');
+                          setCustomerCategory((selected.customerType as any) || 'walk-in');
+                          setCustomerSearchQuery(selected.name);
+                          setIsCustomerSearchOpen(false);
+                          showToast(`Selected customer: ${selected.name} • Continuing to details`);
+                          customerPhoneInputRef.current?.focus();
+                          customerPhoneInputRef.current?.select();
+                        }
+                      } else {
+                        setIsCustomerSearchOpen(false);
+                        customerPhoneInputRef.current?.focus();
+                        customerPhoneInputRef.current?.select();
+                        showToast('Proceeded to Mobile Number • Enter new customer details');
+                      }
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setIsCustomerSearchOpen(false);
+                      scrollToTop();
+                      searchInputRef.current?.focus();
                     }
-                  }
-                }}
-                className="w-full px-3 py-2 bg-white rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/10 font-medium"
-              >
-                <option value="walk-in">⚡ Walk-in Customer (Retail)</option>
-                <option value="new">+ Enter New Customer</option>
-                {customers
-                  .filter((c) => c.customerId !== 'cust-1')
-                  .map((c) => (
-                    <option key={c.customerId} value={c.customerId}>
-                      {c.name} {c.phone ? `(${c.phone})` : `(${c.customerType})`}
-                    </option>
-                  ))}
-              </select>
+                  }}
+                  placeholder="Type name or phone to search existing, or press Enter to continue..."
+                  className="w-full pl-9 pr-3 py-2 bg-white rounded-xl border border-slate-200 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-orange-500 font-medium"
+                />
+              </div>
+
+              {/* Customer Search Dropdown Results */}
+              {isCustomerSearchOpen && customerSearchQuery.trim().length > 0 && (
+                <div
+                  ref={customerSearchDropdownRef}
+                  className="absolute top-full left-0 right-0 mt-1 bg-white rounded-xl border border-slate-200 shadow-xl z-30 overflow-hidden max-h-60 overflow-y-auto divide-y divide-slate-100"
+                >
+                  {customers
+                    .filter((c) => {
+                      if (c.customerId === 'cust-1') return false;
+                      const q = customerSearchQuery.toLowerCase();
+                      return c.name?.toLowerCase().includes(q) || c.phone?.toLowerCase().includes(q);
+                    })
+                    .length > 0 ? (
+                    customers
+                      .filter((c) => {
+                        if (c.customerId === 'cust-1') return false;
+                        const q = customerSearchQuery.toLowerCase();
+                        return c.name?.toLowerCase().includes(q) || c.phone?.toLowerCase().includes(q);
+                      })
+                      .map((c, idx) => {
+                        const isHighlighted = idx === activeCustomerSearchIndex;
+                        return (
+                          <div
+                            key={c.customerId}
+                            onClick={() => {
+                              setSelectedCustomerId(c.customerId);
+                              setCustomerName(c.name);
+                              setCustomerPhone(c.phone || '');
+                              setCustomerAddress(c.siteAddress || c.address || '');
+                              setCustomerGstin(c.gstin || '');
+                              setCustomerCategory((c.customerType as any) || 'walk-in');
+                              setCustomerSearchQuery(c.name);
+                              setIsCustomerSearchOpen(false);
+                              showToast(`Selected customer: ${c.name} • Continuing to details`);
+                              customerPhoneInputRef.current?.focus();
+                              customerPhoneInputRef.current?.select();
+                            }}
+                            className={`px-3.5 py-2.5 flex items-center justify-between text-xs cursor-pointer transition-colors ${
+                              isHighlighted ? 'bg-orange-50 text-slate-900 font-medium border-l-4 border-orange-500' : 'hover:bg-slate-50 text-slate-800'
+                            }`}
+                          >
+                            <div>
+                              <p className="font-bold text-slate-900">{c.name}</p>
+                              <p className="text-[11px] text-slate-500">
+                                {c.phone ? `Phone: ${c.phone}` : ''} {c.customerType ? `• ${c.customerType}` : ''}
+                              </p>
+                            </div>
+                            {isHighlighted && (
+                              <span className="text-[10px] font-mono bg-orange-500 text-white px-1.5 py-0.5 rounded font-bold">
+                                ↵ Select
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })
+                  ) : (
+                    <div className="px-4 py-3 text-xs text-slate-500 text-center">
+                      No matching customer found. Press Enter to add new.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Customer Name and Mobile Number */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                  Mobile <span className="text-slate-400 font-normal">(F4)</span>
+                  Mobile Number
                 </label>
                 <input
                   ref={customerPhoneInputRef}
@@ -2065,13 +2193,8 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      if (!customerPhone.trim() || customerPhone.trim().toLowerCase() === 'walk-in' || customerName.trim()) {
-                        focusCashTendered();
-                        showToast('Proceeded to Cash Tendered • Press Enter for Discount');
-                      } else {
-                        customerNameInputRef.current?.focus();
-                        customerNameInputRef.current?.select();
-                      }
+                      customerNameInputRef.current?.focus();
+                      customerNameInputRef.current?.select();
                     } else if (e.key === 'Escape') {
                       e.preventDefault();
                       scrollToTop();
@@ -2096,13 +2219,8 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      if (isGstBill) {
-                        customerAddressInputRef.current?.focus();
-                        customerAddressInputRef.current?.select();
-                      } else {
-                        focusCashTendered();
-                        showToast('Proceeded to Cash Tendered • Press Enter for Discount');
-                      }
+                      customerAddressInputRef.current?.focus();
+                      customerAddressInputRef.current?.select();
                     } else if (e.key === 'Escape') {
                       e.preventDefault();
                       scrollToTop();
@@ -2129,13 +2247,8 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    if (isGstBill) {
-                      customerGstinInputRef.current?.focus();
-                      customerGstinInputRef.current?.select();
-                    } else {
-                      focusCashTendered();
-                      showToast('Proceeded to Cash Tendered • Press Enter for Discount');
-                    }
+                    customerGstinInputRef.current?.focus();
+                    customerGstinInputRef.current?.select();
                   } else if (e.key === 'Escape') {
                     e.preventDefault();
                     scrollToTop();
@@ -2162,8 +2275,8 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      focusCashTendered();
-                      showToast('Proceeded to Cash Tendered • Press Enter for Discount');
+                      focusAndSelectDiscountInput();
+                      showToast('Proceeded to Discount input');
                     } else if (e.key === 'Escape') {
                       e.preventDefault();
                       scrollToTop();
@@ -2287,8 +2400,25 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                 id="btn-pay-credit"
                 onClick={() => {
                   setPaymentMethod('credit');
-                  scrollToBottom();
-                  setTimeout(() => paymentDueDateInputRef.current?.focus(), 50);
+                  const trimmedName = customerName.trim();
+                  const isGenericWalkIn = !trimmedName || trimmedName === 'Walk-in Customer (General)' || trimmedName === 'Walk-in Customer';
+                  const cleanPhone = customerPhone.trim().replace(/\D/g, '');
+                  const isMissingPhone = !customerPhone.trim() || cleanPhone.length < 10;
+
+                  if (isGenericWalkIn || isMissingPhone) {
+                    scrollToCustomerDetails();
+                    if (isGenericWalkIn) {
+                      customerSearchInputRef.current?.focus();
+                      customerSearchInputRef.current?.select();
+                    } else {
+                      customerPhoneInputRef.current?.focus();
+                      customerPhoneInputRef.current?.select();
+                    }
+                    showToast('Customer Name & Mobile Number required for Credit bills');
+                  } else {
+                    scrollToBottom();
+                    setTimeout(() => paymentDueDateInputRef.current?.focus(), 50);
+                  }
                 }}
                 className={`py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-1.5 transition-all cursor-pointer ${
                   paymentMethod === 'credit'
@@ -2306,67 +2436,6 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
               </button>
             </div>
           </div>
-
-          {/* If Cash: Tendered and Change Return Calculator */}
-          {paymentMethod === 'cash' && cartItems.length > 0 && (
-            <div className="bg-orange-50/60 border border-orange-200/80 rounded-xl p-3 space-y-1.5 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-orange-950">Cash Tendered (₹)</span>
-                {changeDue > 0 ? (
-                  <span className="font-bold text-emerald-700 font-mono">
-                    Change: {formatINR(changeDue)}
-                  </span>
-                ) : (
-                  <span className="text-[10px] text-orange-700 font-medium">
-                    Press <kbd className="font-mono font-bold bg-white/80 px-1 py-0.5 rounded border border-orange-300">Enter</kbd> ➔ Discount
-                  </span>
-                )}
-              </div>
-              <input
-                ref={cashTenderedInputRef}
-                type="text"
-                inputMode="decimal"
-                id="input-cash-tendered"
-                value={cashTendered}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === '' || /^\d*\.?\d*$/.test(val)) {
-                    setCashTendered(val);
-                  }
-                }}
-                onFocus={(e) => {
-                  e.target.select();
-                  scrollDownToCashTendered();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    return;
-                  }
-                  const isCmdOrCtrl = e.ctrlKey || e.metaKey;
-                  if (isCmdOrCtrl && (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter')) {
-                    e.preventDefault();
-                    if (cartItems.length > 0) handlePrintBill();
-                    else showToast('Cart is empty. Search products first.');
-                  } else if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
-                    e.preventDefault();
-                    focusAndSelectDiscountInput();
-                    if (cashTendered && parseFloat(cashTendered) > 0) {
-                      showToast(`Cash ₹${cashTendered} recorded • Discount selected`);
-                    } else {
-                      showToast('Discount selected • Type discount amount (or press Enter)');
-                    }
-                  } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    scrollToTop();
-                    searchInputRef.current?.focus();
-                  }
-                }}
-                placeholder={`Type cash amount (e.g. ${grandTotal}) • Press Enter for Discount`}
-                className="w-full px-3 py-2 bg-white border border-orange-300 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-orange-500/20 font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              />
-            </div>
-          )}
 
           {/* If Credit selected: Due Date Input */}
           {paymentMethod === 'credit' && (
@@ -2512,10 +2581,13 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                     }
                     if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
                       e.preventDefault();
-                      showToast(parseFloat(discountAmountInput) > 0 ? `Discount ₹${discountAmountInput} applied • Ctrl+Enter to Print` : 'Discount saved • Ctrl+Enter to Print');
+                      showToast(parseFloat(discountAmountInput) > 0 ? `Discount ₹${discountAmountInput} applied • Back to product search` : 'Discount saved • Back to product search');
+                      scrollToTop();
                       searchInputRef.current?.focus();
+                      searchInputRef.current?.select();
                     } else if (e.key === 'Escape') {
                       e.preventDefault();
+                      scrollToTop();
                       searchInputRef.current?.focus();
                     }
                   }}
@@ -2565,10 +2637,13 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                     }
                     if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
                       e.preventDefault();
-                      showToast(parseFloat(discountPercentInput) > 0 ? `Discount ${discountPercentInput}% applied • Ctrl+Enter to Print` : 'Discount saved • Ctrl+Enter to Print');
+                      showToast(parseFloat(discountPercentInput) > 0 ? `Discount ${discountPercentInput}% applied • Back to product search` : 'Discount saved • Back to product search');
+                      scrollToTop();
                       searchInputRef.current?.focus();
+                      searchInputRef.current?.select();
                     } else if (e.key === 'Escape') {
                       e.preventDefault();
+                      scrollToTop();
                       searchInputRef.current?.focus();
                     }
                   }}

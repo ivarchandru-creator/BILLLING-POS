@@ -19,6 +19,7 @@ interface BillPrintModalProps {
   settings: ShopSettings;
   isOpen: boolean;
   onClose: () => void;
+  onPrintConfirm?: () => void;
 }
 
 export const BillPrintModal: React.FC<BillPrintModalProps> = ({
@@ -26,6 +27,7 @@ export const BillPrintModal: React.FC<BillPrintModalProps> = ({
   settings,
   isOpen,
   onClose,
+  onPrintConfirm,
 }) => {
   // Paginate items for A5 printing: max 15 products per page
   const a5Pages = useMemo(() => {
@@ -59,8 +61,29 @@ export const BillPrintModal: React.FC<BillPrintModalProps> = ({
     }
   }, [isOpen, invoice.invoiceId, invoice.templateType, invoice.printerType, settings.defaultPrinterType, settings.thermalPaperWidth]);
 
+  const hasConfirmedRef = React.useRef(false);
+
+  useEffect(() => {
+    hasConfirmedRef.current = false;
+  }, [invoice.invoiceId]);
+
+  const triggerPrintConfirm = () => {
+    if (!hasConfirmedRef.current) {
+      hasConfirmedRef.current = true;
+      if (onPrintConfirm) {
+        onPrintConfirm();
+      }
+    }
+  };
+
   const handlePrint = () => {
     window.print();
+    triggerPrintConfirm();
+  };
+
+  const handleDownload = () => {
+    downloadInvoicePdf(invoice, settings, selectedFormat === 'a5' ? 'a5' : 'a4');
+    triggerPrintConfirm();
   };
 
   // Keyboard navigation for Print Modal: Enter/Ctrl+P to Print, Escape to Close, Alt+4/Alt+5 or 4/5 to switch size
@@ -86,7 +109,7 @@ export const BillPrintModal: React.FC<BillPrintModalProps> = ({
         setSelectedFormat('a5');
       } else if ((isAlt || isCmdOrCtrl) && (key === 'd' || code === 'KeyD')) {
         e.preventDefault();
-        downloadInvoicePdf(invoice, settings, selectedFormat === 'a5' ? 'a5' : 'a4');
+        handleDownload();
       }
     };
     window.addEventListener('keydown', handleModalKeyDown);
@@ -205,7 +228,7 @@ export const BillPrintModal: React.FC<BillPrintModalProps> = ({
             <button
               type="button"
               id="btn-modal-download-pdf"
-              onClick={() => downloadInvoicePdf(invoice, settings, selectedFormat === 'a5' ? 'a5' : 'a4')}
+              onClick={handleDownload}
               className="flex items-center gap-1.5 px-3 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
               title={`Download ${selectedFormat === 'a5' ? 'A5' : 'A4'} Invoice PDF (Alt+D)`}
             >
@@ -910,7 +933,7 @@ export const BillPrintModal: React.FC<BillPrintModalProps> = ({
             <button
               type="button"
               id="btn-footer-download-pdf"
-              onClick={() => downloadInvoicePdf(invoice, settings, selectedFormat === 'a5' ? 'a5' : 'a4')}
+              onClick={handleDownload}
               className="flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-lg transition-colors border border-slate-300 cursor-pointer"
               title={`Download standard ${selectedFormat === 'a5' ? 'A5' : 'A4'} Invoice PDF (Alt+D)`}
             >

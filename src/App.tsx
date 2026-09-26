@@ -68,6 +68,7 @@ export default function App() {
 
   // Print Modal State
   const [printModalInvoice, setPrintModalInvoice] = useState<Invoice | null>(null);
+  const [printModalConfirmCallback, setPrintModalConfirmCallback] = useState<(() => void) | null>(null);
 
   // Initialize data on mount
   useEffect(() => {
@@ -627,6 +628,91 @@ export default function App() {
     }
   };
 
+  // Delete invoice / sales history & restore stock/revenue/customers
+  const handleDeleteInvoice = (invoiceId: string) => {
+    const targetInv = invoices.find((inv) => inv.invoiceId === invoiceId);
+    if (!targetInv) return;
+
+    // 1. Remove from invoices
+    const updatedInvoices = invoices.filter((inv) => inv.invoiceId !== invoiceId);
+    setInvoices(updatedInvoices);
+    saveInvoices(updatedInvoices);
+
+    // 2. Restore stock for each item in the invoice & record stock transactions
+    const nowDateTime = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const newStockTransactions: StockTransaction[] = [];
+
+    const updatedProducts = products.map((p) => {
+      // Find all matching invoice items for this product
+      const matchingItems = targetInv.items.filter(
+        (item) =>
+          (item.productId && item.productId === p.productId) ||
+          ((item.productNameSnapshot || (item as any).name || '').toLowerCase() === (p.name || '').toLowerCase())
+      );
+      const qtyToAdd = matchingItems.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+
+      if (qtyToAdd > 0) {
+        const prevStock = p.stockQty;
+        const newStock = prevStock + qtyToAdd;
+
+        newStockTransactions.push({
+          transactionId: `tx-del-${Date.now()}-${p.productId}-${Math.random().toString(36).substr(2, 4)}`,
+          productId: p.productId,
+          productName: p.name,
+          type: 'adjustment',
+          quantity: qtyToAdd,
+          previousStock: prevStock,
+          newStock: newStock,
+          referenceId: targetInv.invoiceNumber,
+          dateTime: nowDateTime,
+          notes: `Restored stock from deleted bill #${targetInv.invoiceNumber}`,
+        });
+
+        return {
+          ...p,
+          stockQty: newStock,
+        };
+      }
+      return p;
+    });
+
+    setProducts(updatedProducts);
+    saveProducts(updatedProducts);
+
+    if (newStockTransactions.length > 0) {
+      setStockTransactions((prev) => {
+        const combined = [...newStockTransactions, ...prev];
+        saveStockTransactions(combined);
+        return combined;
+      });
+    }
+
+    // 3. Update customer credit balance / total purchases if applicable
+    if (targetInv.customerName) {
+      setCustomers((prev) => {
+        const updated = prev.map((c) => {
+          if (
+            (targetInv.customerId && c.customerId === targetInv.customerId) ||
+            c.name.toLowerCase() === targetInv.customerName?.toLowerCase()
+          ) {
+            const isUnpaidCredit = targetInv.paymentMethod === 'credit' && !targetInv.creditPaid;
+            const newBal = isUnpaidCredit ? Math.max(0, (c.creditBalance || 0) - targetInv.grandTotal) : (c.creditBalance || 0);
+            const newTotalPurchases = Math.max(0, (c.totalPurchases || 0) - targetInv.grandTotal);
+            return {
+              ...c,
+              creditBalance: newBal,
+              totalPurchases: newTotalPurchases,
+              expectedPaymentDate: newBal === 0 ? undefined : c.expectedPaymentDate,
+            };
+          }
+          return c;
+        });
+        saveCustomers(updated);
+        return updated;
+      });
+    }
+  };
+
   // Factory reset
   const handleResetData = () => {
     resetToDemoData();
@@ -710,7 +796,10 @@ export default function App() {
               settings={settings}
               customers={customers}
               onSaveInvoice={handleSaveInvoice}
-              onPreviewInvoice={(inv) => setPrintModalInvoice(inv)}
+              onPreviewInvoice={(inv, onConfirm) => {
+                setPrintModalInvoice(inv);
+                setPrintModalConfirmCallback(onConfirm ? () => onConfirm : null);
+              }}
               onAddCustomer={handleSaveCustomer}
               onCartCountChange={setDraftCartCount}
             />
@@ -742,6 +831,7 @@ export default function App() {
               initialCreditFilter={customerCreditFilter}
               onSaveCustomer={handleSaveCustomer}
               onDeleteCustomer={handleDeleteCustomer}
+              onMarkCreditPaid={handleMarkCreditPaid}
             />
           )}
 
@@ -765,6 +855,7 @@ export default function App() {
               products={products}
               onPrintInvoice={(inv) => setPrintModalInvoice(inv)}
               onMarkCreditPaid={handleMarkCreditPaid}
+              onDeleteInvoice={handleDeleteInvoice}
             />
           )}
 
@@ -788,7 +879,16 @@ export default function App() {
           invoice={printModalInvoice}
           settings={settings}
           isOpen={true}
-          onClose={() => setPrintModalInvoice(null)}
+          onClose={() => {
+            setPrintModalInvoice(null);
+            setPrintModalConfirmCallback(null);
+          }}
+          onPrintConfirm={() => {
+            if (printModalConfirmCallback) {
+              printModalConfirmCallback();
+              setPrintModalConfirmCallback(null);
+            }
+          }}
         />
       )}
     </div>

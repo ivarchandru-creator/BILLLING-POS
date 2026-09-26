@@ -26,6 +26,7 @@ interface CustomersViewProps {
   onSaveCustomer: (customer: Customer) => void;
   onDeleteCustomer?: (customerId: string) => void;
   onSelectCustomerToBill?: (customer: Customer) => void;
+  onMarkCreditPaid?: (invoiceId: string) => void;
 }
 
 export const CustomersView: React.FC<CustomersViewProps> = ({
@@ -36,6 +37,7 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
   onSaveCustomer,
   onDeleteCustomer,
   onSelectCustomerToBill,
+  onMarkCreditPaid,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -44,6 +46,31 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [deleteConfirmCustomer, setDeleteConfirmCustomer] = useState<Customer | null>(null);
+
+  // Custom Credit Due Payment Modal State
+  const [payingCustomer, setPayingCustomer] = useState<Customer | null>(null);
+  const [customPayAmount, setCustomPayAmount] = useState<string>('');
+  const [customPromiseDate, setCustomPromiseDate] = useState<string>('');
+  const [payMethod, setPayMethod] = useState<'cash' | 'upi' | 'card' | 'bank'>('cash');
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 3500);
+  };
+
+  const getFutureDateStr = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return d.toISOString().split('T')[0];
+  };
+
+  const openRecordPaymentModal = (cust: Customer) => {
+    setPayingCustomer(cust);
+    setCustomPayAmount('');
+    setCustomPromiseDate(cust.expectedPaymentDate || '');
+    setPayMethod('cash');
+  };
 
   useEffect(() => {
     if (initialCreditFilter !== undefined) {
@@ -132,6 +159,57 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
 
     setIsAddModalOpen(false);
     setEditingCustomerId(null);
+  };
+
+  const handleConfirmCreditPayment = () => {
+    if (!payingCustomer) return;
+    const payNum = parseFloat(customPayAmount) || 0;
+    if (payNum <= 0) {
+      showToast('Please enter a valid payment amount greater than ₹0.');
+      return;
+    }
+    const currentDue = payingCustomer.creditBalance || 0;
+    if (payNum > currentDue) {
+      showToast(`Payment amount cannot exceed current due (${formatINR(currentDue)}).`);
+      return;
+    }
+
+    const newBalance = Math.max(0, currentDue - payNum);
+    const updatedCust: Customer = {
+      ...payingCustomer,
+      creditBalance: newBalance,
+      expectedPaymentDate: newBalance === 0 ? undefined : (customPromiseDate.trim() || payingCustomer.expectedPaymentDate),
+    };
+
+    onSaveCustomer(updatedCust);
+
+    // If full balance paid, mark credit invoices as paid
+    if (newBalance === 0 && onMarkCreditPaid && invoices.length > 0) {
+      invoices
+        .filter(
+          (inv) =>
+            (inv.customerId === payingCustomer.customerId ||
+              (inv.customerPhone && payingCustomer.phone && inv.customerPhone.replace(/\D/g, '') === payingCustomer.phone.replace(/\D/g, '')) ||
+              inv.customerName?.toLowerCase() === payingCustomer.name.toLowerCase()) &&
+            inv.paymentMethod === 'credit' &&
+            !inv.creditPaid
+        )
+        .forEach((inv) => {
+          onMarkCreditPaid(inv.invoiceId);
+        });
+    }
+
+    if (selectedCustomer?.customerId === payingCustomer.customerId) {
+      setSelectedCustomer(updatedCust);
+    }
+
+    if (newBalance === 0) {
+      showToast(`Full payment of ${formatINR(payNum)} recorded for ${payingCustomer.name}! Due settled.`);
+    } else {
+      showToast(`Payment of ${formatINR(payNum)} recorded for ${payingCustomer.name}! Remaining pending due: ${formatINR(newBalance)}.`);
+    }
+
+    setPayingCustomer(null);
   };
 
   const creditPendingCount = useMemo(() => {
@@ -357,6 +435,17 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
                     </td>
                     <td className="py-3.5 px-5 text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        {cust.creditBalance > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => openRecordPaymentModal(cust)}
+                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 font-bold text-xs rounded transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                            title={`Record custom credit payment for ${cust.name}`}
+                          >
+                            <CreditCard className="w-3 h-3 text-emerald-600" />
+                            <span>Pay Due</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setSelectedCustomer(cust)}
@@ -623,22 +712,27 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
 
             {/* Quick Record Payment / Settle Due */}
             {selectedCustomer.creditBalance > 0 && (
-              <div className="pt-3 border-t border-slate-100 bg-amber-50/60 p-3 rounded-lg border border-amber-200/80 space-y-2">
-                <p className="font-bold text-slate-900 text-xs">Record Credit Payment / Settle Due</p>
-                <div className="flex gap-2">
+              <div className="pt-3 border-t border-slate-100 bg-amber-50/70 p-3.5 rounded-xl border border-amber-200/90 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <p className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <CreditCard className="w-3.5 h-3.5 text-amber-700" />
+                    <span>Record Credit Payment / Settle Due</span>
+                  </p>
+                  <span className="text-[11px] font-mono font-bold text-amber-900 bg-amber-100/90 px-2 py-0.5 rounded border border-amber-200">
+                    Due: {formatINR(selectedCustomer.creditBalance)}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600">
+                  Accept full payment or enter any custom amount (e.g. ₹100 of ₹200) with remaining balance tracked.
+                </p>
+                <div className="flex gap-2 pt-1">
                   <button
                     type="button"
-                    onClick={() => {
-                      const updated = {
-                        ...selectedCustomer,
-                        creditBalance: 0,
-                      };
-                      onSaveCustomer(updated);
-                      setSelectedCustomer(updated);
-                    }}
-                    className="flex-1 py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold shadow-2xs"
+                    onClick={() => openRecordPaymentModal(selectedCustomer)}
+                    className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
                   >
-                    Clear Full Balance ({formatINR(selectedCustomer.creditBalance)})
+                    <CreditCard className="w-3.5 h-3.5" />
+                    <span>Record Payment (Enter Custom Amount)</span>
                   </button>
                 </div>
               </div>
@@ -760,6 +854,265 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {/* Record Credit Due Payment Modal (Custom Amount & Partial Payment) */}
+      {payingCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-200 animate-scale-up">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-emerald-100 text-emerald-700 rounded-xl">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900">Record Credit Payment</h3>
+                  <p className="text-xs text-slate-500">
+                    {payingCustomer.name} {payingCustomer.phone && `• ${payingCustomer.phone}`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPayingCustomer(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Current Due Overview Card */}
+            <div className="bg-amber-50/80 border border-amber-200/80 p-3.5 rounded-xl flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-semibold text-amber-900 uppercase tracking-wider">
+                  Outstanding Credit Due
+                </p>
+                <p className="text-xl font-black font-mono text-amber-900 mt-0.5">
+                  {formatINR(payingCustomer.creditBalance || 0)}
+                </p>
+              </div>
+              {payingCustomer.expectedPaymentDate && (
+                <div className="text-right">
+                  <span className="text-[10px] text-amber-700 block">Promised Due Date</span>
+                  <span className="text-xs font-mono font-bold text-amber-900">
+                    {payingCustomer.expectedPaymentDate}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Custom Payment Amount Input Field */}
+            <div className="space-y-2">
+              <label className="block text-slate-700 font-bold text-xs">
+                Payment Amount Received (₹) *
+              </label>
+              <div className="relative">
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-bold text-slate-400 text-sm">
+                  ₹
+                </span>
+                <input
+                  type="number"
+                  min="1"
+                  max={payingCustomer.creditBalance || 0}
+                  step="any"
+                  autoFocus
+                  value={customPayAmount}
+                  onChange={(e) => setCustomPayAmount(e.target.value)}
+                  placeholder="Enter amount e.g. 100"
+                  className="w-full pl-8 pr-3 py-2.5 border-2 border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+
+              {/* Quick Amount Suggestion Chips */}
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[11px] text-slate-500 font-medium">Quick options:</span>
+                <button
+                  type="button"
+                  onClick={() => setCustomPayAmount(String(payingCustomer.creditBalance || 0))}
+                  className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Full Due ({formatINR(payingCustomer.creditBalance || 0)})
+                </button>
+                {(payingCustomer.creditBalance || 0) > 10 && (
+                  <button
+                    type="button"
+                    onClick={() => setCustomPayAmount(String(Math.round((payingCustomer.creditBalance || 0) / 2)))}
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    50% Half ({formatINR(Math.round((payingCustomer.creditBalance || 0) / 2))})
+                  </button>
+                )}
+                {(payingCustomer.creditBalance || 0) > 100 && (
+                  <button
+                    type="button"
+                    onClick={() => setCustomPayAmount('100')}
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    ₹100
+                  </button>
+                )}
+                {(payingCustomer.creditBalance || 0) > 200 && (
+                  <button
+                    type="button"
+                    onClick={() => setCustomPayAmount('200')}
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    ₹200
+                  </button>
+                )}
+                {(payingCustomer.creditBalance || 0) > 500 && (
+                  <button
+                    type="button"
+                    onClick={() => setCustomPayAmount('500')}
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    ₹500
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Live Calculation Preview Breakdown */}
+            {(() => {
+              const currentDue = payingCustomer.creditBalance || 0;
+              const payNum = parseFloat(customPayAmount) || 0;
+              const remainingDue = Math.max(0, currentDue - payNum);
+              const isOver = payNum > currentDue;
+
+              return (
+                <div className="space-y-3">
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs space-y-1.5">
+                    <div className="flex justify-between text-slate-600">
+                      <span>Total Current Due:</span>
+                      <span className="font-mono font-semibold text-slate-900">{formatINR(currentDue)}</span>
+                    </div>
+                    <div className="flex justify-between text-emerald-700 font-semibold">
+                      <span>Amount Received Now:</span>
+                      <span className="font-mono font-bold">- {formatINR(payNum)}</span>
+                    </div>
+                    <div className="pt-1.5 border-t border-slate-200 flex justify-between items-center">
+                      <span className="font-bold text-slate-900">Remaining Pending Due:</span>
+                      <span className={`font-mono text-sm font-black ${
+                        isOver ? 'text-rose-600' : remainingDue === 0 ? 'text-emerald-600' : 'text-amber-800'
+                      }`}>
+                        {formatINR(remainingDue)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {isOver && (
+                    <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs font-medium">
+                      Payment amount cannot exceed the total credit due ({formatINR(currentDue)}).
+                    </div>
+                  )}
+
+                  {/* If remaining due > 0, allow setting new promised due date */}
+                  {!isOver && remainingDue > 0 && payNum > 0 && (
+                    <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl space-y-2">
+                      <label className="block text-slate-800 font-bold text-xs">
+                        When will the pending {formatINR(remainingDue)} be paid? <span className="text-slate-500 font-normal">(Promised Date)</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={customPromiseDate}
+                        onChange={(e) => setCustomPromiseDate(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono focus:outline-none focus:border-orange-500"
+                      />
+                      <div className="flex items-center gap-1.5 pt-0.5">
+                        <span className="text-[10px] text-slate-500">Quick set:</span>
+                        <button
+                          type="button"
+                          onClick={() => setCustomPromiseDate(getFutureDateStr(7))}
+                          className="px-2 py-0.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded text-[10px] font-medium transition-colors cursor-pointer"
+                        >
+                          +7 Days
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCustomPromiseDate(getFutureDateStr(15))}
+                          className="px-2 py-0.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded text-[10px] font-medium transition-colors cursor-pointer"
+                        >
+                          +15 Days
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCustomPromiseDate(getFutureDateStr(30))}
+                          className="px-2 py-0.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded text-[10px] font-medium transition-colors cursor-pointer"
+                        >
+                          +1 Month
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {!isOver && remainingDue === 0 && payNum > 0 && (
+                    <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs font-semibold flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Full balance will be settled! Customer account will have ₹0 due.</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Payment Method Selector */}
+            <div className="space-y-1.5 pt-1">
+              <label className="block text-slate-700 font-semibold text-xs">
+                Payment Method Received Through
+              </label>
+              <div className="grid grid-cols-4 gap-2">
+                {(['cash', 'upi', 'card', 'bank'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setPayMethod(m)}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-bold capitalize border transition-colors cursor-pointer text-center ${
+                      payMethod === m
+                        ? 'bg-orange-500 text-white border-orange-500 shadow-2xs'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {m === 'bank' ? 'Bank Transfer' : m}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setPayingCustomer(null)}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 font-medium text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={
+                  !customPayAmount ||
+                  (parseFloat(customPayAmount) || 0) <= 0 ||
+                  (parseFloat(customPayAmount) || 0) > (payingCustomer.creditBalance || 0)
+                }
+                onClick={handleConfirmCreditPayment}
+                className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs shadow-sm transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>
+                  Confirm Payment of {formatINR(parseFloat(customPayAmount) || 0)}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Feedback */}
+      {toastMsg && (
+        <div className="fixed top-16 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-2.5 animate-fade-in font-medium text-xs sm:text-sm">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{toastMsg}</span>
         </div>
       )}
     </div>
