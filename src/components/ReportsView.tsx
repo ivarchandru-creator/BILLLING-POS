@@ -94,22 +94,24 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings, pr
 
   // Aggregate Metrics
   const totalRevenue = useMemo(
-    () => filteredInvoices.reduce((sum, inv) => sum + inv.grandTotal, 0),
+    () => Math.round(filteredInvoices.reduce((sum, inv) => sum + (inv.grandTotal || 0), 0) * 100) / 100,
     [filteredInvoices]
   );
   const totalBills = filteredInvoices.length;
 
   // Discount & Gross Metrics
   const totalDiscount = useMemo(
-    () => filteredInvoices.reduce((sum, inv) => sum + getInvoiceDiscount(inv), 0),
+    () => Math.round(filteredInvoices.reduce((sum, inv) => sum + getInvoiceDiscount(inv), 0) * 100) / 100,
     [filteredInvoices]
   );
   const totalGross = useMemo(
     () =>
-      filteredInvoices.reduce(
-        (sum, inv) => sum + (inv.subtotal || (inv.grandTotal - (inv.gstAmount || 0))),
-        0
-      ),
+      Math.round(
+        filteredInvoices.reduce(
+          (sum, inv) => sum + (inv.subtotal || ((inv.grandTotal || 0) - (inv.gstAmount || 0))),
+          0
+        ) * 100
+      ) / 100,
     [filteredInvoices]
   );
   const discountedBillsCount = useMemo(
@@ -122,39 +124,41 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ invoices, settings, pr
   );
 
   const totalGst = useMemo(
-    () => filteredInvoices.reduce((sum, inv) => sum + inv.gstAmount, 0),
+    () => Math.round(filteredInvoices.reduce((sum, inv) => sum + (inv.gstAmount || 0), 0) * 100) / 100,
     [filteredInvoices]
   );
   const totalUnitsSold = useMemo(
     () =>
       filteredInvoices.reduce(
         (sum, inv) =>
-          sum + inv.items.reduce((iSum, it) => iSum + it.quantity, 0),
+          sum + (inv.items || []).reduce((iSum, it) => iSum + (it.quantity || 0), 0),
         0
       ),
     [filteredInvoices]
   );
-  const avgBillValue = totalBills > 0 ? totalRevenue / totalBills : 0;
+  const avgBillValue = totalBills > 0 ? Math.round((totalRevenue / totalBills) * 100) / 100 : 0;
 
   // Cost of Goods Sold (COGS) & Profit Calculations based on Cost Price vs Selling Price
   const totalCostOfGoods = useMemo(() => {
-    return filteredInvoices.reduce((sum, inv) => {
-      const invCogs = inv.items.reduce((iSum, it) => {
-        const unitCost = getItemCostPrice(it);
-        return iSum + unitCost * it.quantity;
-      }, 0);
-      return sum + invCogs;
-    }, 0);
+    return Math.round(
+      filteredInvoices.reduce((sum, inv) => {
+        const invCogs = (inv.items || []).reduce((iSum, it) => {
+          const unitCost = getItemCostPrice(it);
+          return iSum + unitCost * (it.quantity || 0);
+        }, 0);
+        return sum + invCogs;
+      }, 0) * 100
+    ) / 100;
   }, [filteredInvoices, productCostMap]);
 
   // Net pre-tax taxable sales (Gross Subtotal minus discounts given)
   const netTaxableSales = useMemo(() => {
-    return Math.max(0, totalGross - totalDiscount);
+    return Math.max(0, Math.round((totalGross - totalDiscount) * 100) / 100);
   }, [totalGross, totalDiscount]);
 
   // Total Gross Profit = Net pre-tax sales - Total Cost of Goods Sold
   const totalProfit = useMemo(() => {
-    return netTaxableSales - totalCostOfGoods;
+    return Math.round((netTaxableSales - totalCostOfGoods) * 100) / 100;
   }, [netTaxableSales, totalCostOfGoods]);
 
   const profitMarginPercent = useMemo(() => {

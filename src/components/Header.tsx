@@ -45,12 +45,13 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Right: Shop / Context info */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2.5">
         {settings?.shopName && (
           <span className="text-xs text-slate-500 font-medium hidden sm:inline">
             {settings.shopName}
           </span>
         )}
+
         <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-200/60">
           POS Active
         </span>

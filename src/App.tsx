@@ -31,6 +31,15 @@ import {
   saveCategories,
   DEFAULT_PRODUCT_CATEGORIES,
 } from './utils/storage';
+import {
+  syncSingleInvoiceToSupabase,
+  syncSingleProductToSupabase,
+  deleteSingleProductFromSupabase,
+  deleteSingleInvoiceFromSupabase,
+  syncSingleCustomerToSupabase,
+  syncSingleSupplierToSupabase,
+  pullDataFromSupabase,
+} from './utils/supabaseClient';
 import { getCurrentDateTimeFormatted, generateInvoiceNumber } from './utils/formatters';
 import { getActiveAuthSession, clearAuthSession } from './utils/auth';
 import { Sidebar } from './components/Sidebar';
@@ -70,7 +79,7 @@ export default function App() {
   const [printModalInvoice, setPrintModalInvoice] = useState<Invoice | null>(null);
   const [printModalConfirmCallback, setPrintModalConfirmCallback] = useState<(() => void) | null>(null);
 
-  // Initialize data on mount
+  // Initialize data on mount: load from local cache first, then sync latest from Supabase cloud
   useEffect(() => {
     setProducts(loadProducts());
     setInvoices(loadInvoices());
@@ -80,6 +89,9 @@ export default function App() {
     setSettings(loadShopSettings());
     setStockTransactions(loadStockTransactions());
     setCategories(loadCategories());
+
+    // Auto-fetch fresh production records from Supabase in the background
+    handlePullFromSupabase();
   }, []);
 
   // Global Keyboard Shortcuts
@@ -175,8 +187,8 @@ export default function App() {
                 siteAddress: newInvoice.customerAddress || c.siteAddress,
                 gstin: newInvoice.customerGstin || c.gstin,
                 customerType: (newInvoice.customerCategory as any) || c.customerType || 'walk-in',
-                totalSpent: Math.max(0, (c.totalSpent || 0) + grandTotalDiff),
-                creditBalance: Math.max(0, (c.creditBalance || 0) + creditDiff),
+                totalSpent: Math.max(0, Math.round(((c.totalSpent || 0) + grandTotalDiff) * 100) / 100),
+                creditBalance: Math.max(0, Math.round(((c.creditBalance || 0) + creditDiff) * 100) / 100),
                 lastPurchaseDate: newInvoice.dateTime.split(' ')[0],
                 expectedPaymentDate:
                   newInvoice.paymentMethod === 'credit' && newInvoice.paymentDueDate
@@ -284,6 +296,9 @@ export default function App() {
         saveStockTransactions(updatedTxs);
       }
     }
+
+    // Silent background sync to Supabase (if configured)
+    syncSingleInvoiceToSupabase(newInvoice);
   };
 
   // Save new or edited product
@@ -308,6 +323,9 @@ export default function App() {
       setCategories(updatedCats);
       saveCategories(updatedCats);
     }
+
+    // Background sync to Supabase (if configured)
+    syncSingleProductToSupabase(product);
   };
 
   // Delete product
@@ -315,6 +333,7 @@ export default function App() {
     const updated = products.filter((p) => p.productId !== productId);
     setProducts(updated);
     saveProducts(updated);
+    deleteSingleProductFromSupabase(productId);
   };
 
   // Custom Category management
@@ -368,114 +387,145 @@ export default function App() {
     importedProducts: Product[],
     options: { updateExisting: boolean; stockMode: 'set' | 'add' }
   ) => {
-    const currentProducts = [...products];
-    const newStockTransactions: StockTransaction[] = [];
     const timestamp = Date.now();
+    const newStockTransactions: StockTransaction[] = [];
+    const newCats: string[] = [];
 
-    importedProducts.forEach((imp, idx) => {
-      let matchIndex = -1;
-      if (options.updateExisting) {
-        // Match by SKU first, then by exact name
-        if (imp.skuCode) {
-          matchIndex = currentProducts.findIndex(
-            (p) => p.skuCode && p.skuCode.toLowerCase() === imp.skuCode?.toLowerCase()
-          );
+    setProducts((prevProducts) => {
+      // Use latest products list from state or storage
+      const currentProducts = prevProducts && prevProducts.length > 0 ? [...prevProducts] : loadProducts();
+
+      importedProducts.forEach((imp, idx) => {
+        let matchIndex = -1;
+        if (options.updateExisting) {
+          // 1. Match by product ID directly
+          if (imp.productId) {
+            matchIndex = currentProducts.findIndex((p) => p.productId === imp.productId);
+          }
+          // 2. Match by SKU Code
+          if (matchIndex === -1 && imp.skuCode) {
+            const skuClean = imp.skuCode.trim().toLowerCase();
+            matchIndex = currentProducts.findIndex(
+              (p) => p.skuCode && p.skuCode.trim().toLowerCase() === skuClean
+            );
+          }
+          // 3. Match by Exact Name (trimmed, case-insensitive)
+          if (matchIndex === -1 && imp.name) {
+            const nameClean = imp.name.trim().toLowerCase();
+            matchIndex = currentProducts.findIndex(
+              (p) => p.name && p.name.trim().toLowerCase() === nameClean
+            );
+          }
+          // 4. Match by Normalized Name (alphanumeric only)
+          if (matchIndex === -1 && imp.name) {
+            const normImp = imp.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (normImp.length >= 3) {
+              matchIndex = currentProducts.findIndex(
+                (p) => p.name && p.name.toLowerCase().replace(/[^a-z0-9]/g, '') === normImp
+              );
+            }
+          }
         }
-        if (matchIndex === -1 && imp.name) {
-          matchIndex = currentProducts.findIndex(
-            (p) => p.name.toLowerCase() === imp.name.trim().toLowerCase()
-          );
+
+        if (matchIndex !== -1) {
+          // Update existing item
+          const existing = currentProducts[matchIndex];
+          const prevStock = Number(existing.stockQty) || 0;
+          const impStock = Number(imp.stockQty) || 0;
+          const newStock = options.stockMode === 'add' ? prevStock + impStock : impStock;
+
+          currentProducts[matchIndex] = {
+            ...existing,
+            name: imp.name && imp.name.trim() ? imp.name.trim() : existing.name,
+            category: imp.category && imp.category.trim() ? imp.category.trim() : existing.category,
+            skuCode: imp.skuCode || existing.skuCode,
+            sellingPrice: Number(imp.sellingPrice) > 0 ? Number(imp.sellingPrice) : existing.sellingPrice,
+            purchasePrice: Number(imp.purchasePrice) > 0 ? Number(imp.purchasePrice) : existing.purchasePrice,
+            gstRate: imp.gstRate !== undefined && imp.gstRate !== null ? Number(imp.gstRate) : existing.gstRate,
+            stockQty: newStock,
+            minimumStock: Number(imp.minimumStock) > 0 ? Number(imp.minimumStock) : existing.minimumStock,
+            unit: imp.unit || existing.unit,
+            supplierId: imp.supplierId || existing.supplierId,
+            hsnCode: imp.hsnCode || existing.hsnCode,
+          };
+
+          if (newStock !== prevStock) {
+            newStockTransactions.push({
+              transactionId: `tx-import-${timestamp}-${idx}`,
+              productId: existing.productId,
+              productName: existing.name,
+              type: newStock > prevStock ? 'purchase' : 'adjustment',
+              quantity: Math.abs(newStock - prevStock),
+              previousStock: prevStock,
+              newStock: newStock,
+              dateTime: getCurrentDateTimeFormatted(),
+              referenceId: 'CSV-IMPORT',
+              notes: `CSV Import: Stock updated from ${prevStock} to ${newStock} (${
+                options.stockMode === 'add' ? 'replenishment' : 'recount'
+              })`,
+            });
+          }
+        } else {
+          // Add as new product with a guaranteed unique productId
+          const uniqueId = `prod-csv-${timestamp}-${idx}-${Math.random().toString(36).slice(2, 7)}`;
+          const newProd: Product = {
+            ...imp,
+            productId: uniqueId,
+            name: imp.name && imp.name.trim() ? imp.name.trim() : `Product ${idx + 1}`,
+            category: imp.category && imp.category.trim() ? imp.category.trim() : 'Switches & Sockets',
+            sellingPrice: Number(imp.sellingPrice) || 0,
+            purchasePrice: Number(imp.purchasePrice) || 0,
+            stockQty: Number(imp.stockQty) || 0,
+            minimumStock: Number(imp.minimumStock) || 10,
+            unit: imp.unit || 'pcs',
+            activeStatus: true,
+          };
+          currentProducts.unshift(newProd);
+
+          if (newProd.stockQty > 0) {
+            newStockTransactions.push({
+              transactionId: `tx-import-${timestamp}-${idx}`,
+              productId: newProd.productId,
+              productName: newProd.name,
+              type: 'purchase',
+              quantity: newProd.stockQty,
+              previousStock: 0,
+              newStock: newProd.stockQty,
+              dateTime: getCurrentDateTimeFormatted(),
+              referenceId: 'CSV-IMPORT',
+              notes: `Initial opening stock via CSV import (${newProd.stockQty} ${newProd.unit})`,
+            });
+          }
         }
-      }
 
-      if (matchIndex !== -1) {
-        // Update existing item
-        const existing = currentProducts[matchIndex];
-        const prevStock = existing.stockQty;
-        const newStock =
-          options.stockMode === 'add' ? prevStock + imp.stockQty : imp.stockQty;
-
-        currentProducts[matchIndex] = {
-          ...existing,
-          name: imp.name || existing.name,
-          category: imp.category || existing.category,
-          skuCode: imp.skuCode || existing.skuCode,
-          sellingPrice: imp.sellingPrice,
-          purchasePrice: imp.purchasePrice,
-          gstRate: imp.gstRate,
-          stockQty: newStock,
-          minimumStock: imp.minimumStock,
-          unit: imp.unit,
-          supplierId: imp.supplierId || existing.supplierId,
-          hsnCode: imp.hsnCode || existing.hsnCode,
-        };
-
-        if (newStock !== prevStock) {
-          newStockTransactions.push({
-            transactionId: `tx-import-${timestamp}-${idx}`,
-            productId: existing.productId,
-            productName: existing.name,
-            type: newStock > prevStock ? 'purchase' : 'adjustment',
-            quantity: newStock - prevStock,
-            previousStock: prevStock,
-            newStock: newStock,
-            dateTime: getCurrentDateTimeFormatted(),
-            referenceId: 'CSV-IMPORT',
-            notes: `CSV Import: Stock updated from ${prevStock} to ${newStock} (${
-              options.stockMode === 'add' ? 'replenishment' : 'recount'
-            })`,
-          });
+        if (
+          imp.category &&
+          imp.category.trim() &&
+          !categories.some((c) => c.toLowerCase() === imp.category.trim().toLowerCase()) &&
+          !newCats.some((c) => c.toLowerCase() === imp.category.trim().toLowerCase())
+        ) {
+          newCats.push(imp.category.trim());
         }
-      } else {
-        // Add as new product
-        const newProd: Product = {
-          ...imp,
-          productId: imp.productId || `prod-csv-${timestamp}-${idx}`,
-        };
-        currentProducts.unshift(newProd);
+      });
 
-        if (newProd.stockQty > 0) {
-          newStockTransactions.push({
-            transactionId: `tx-import-${timestamp}-${idx}`,
-            productId: newProd.productId,
-            productName: newProd.name,
-            type: 'purchase',
-            quantity: newProd.stockQty,
-            previousStock: 0,
-            newStock: newProd.stockQty,
-            dateTime: getCurrentDateTimeFormatted(),
-            referenceId: 'CSV-IMPORT',
-            notes: `Initial opening stock via CSV import (${newProd.stockQty} ${newProd.unit})`,
-          });
-        }
-      }
+      saveProducts(currentProducts);
+      return currentProducts;
     });
-
-    setProducts(currentProducts);
-    saveProducts(currentProducts);
 
     if (newStockTransactions.length > 0) {
-      const updatedTxs = [...newStockTransactions, ...stockTransactions];
-      setStockTransactions(updatedTxs);
-      saveStockTransactions(updatedTxs);
+      setStockTransactions((prevTxs) => {
+        const updatedTxs = [...newStockTransactions, ...prevTxs];
+        saveStockTransactions(updatedTxs);
+        return updatedTxs;
+      });
     }
 
-    // Capture any newly imported custom categories
-    const newCats: string[] = [];
-    importedProducts.forEach((imp) => {
-      if (
-        imp.category &&
-        imp.category.trim() &&
-        !categories.some((c) => c.toLowerCase() === imp.category.trim().toLowerCase()) &&
-        !newCats.some((c) => c.toLowerCase() === imp.category.trim().toLowerCase())
-      ) {
-        newCats.push(imp.category.trim());
-      }
-    });
     if (newCats.length > 0) {
-      const updatedCats = [...categories, ...newCats];
-      setCategories(updatedCats);
-      saveCategories(updatedCats);
+      setCategories((prevCats) => {
+        const updatedCats = [...prevCats, ...newCats];
+        saveCategories(updatedCats);
+        return updatedCats;
+      });
     }
   };
 
@@ -540,6 +590,7 @@ export default function App() {
     }
     setSuppliers(updated);
     saveSuppliers(updated);
+    syncSingleSupplierToSupabase(supplier);
   };
 
   // Delete supplier
@@ -570,6 +621,7 @@ export default function App() {
     }
     setCustomers(updated);
     saveCustomers(updated);
+    syncSingleCustomerToSupabase(customer);
   };
 
   // Delete customer
@@ -637,6 +689,7 @@ export default function App() {
     const updatedInvoices = invoices.filter((inv) => inv.invoiceId !== invoiceId);
     setInvoices(updatedInvoices);
     saveInvoices(updatedInvoices);
+    deleteSingleInvoiceFromSupabase(invoiceId);
 
     // 2. Restore stock for each item in the invoice & record stock transactions
     const nowDateTime = new Date().toISOString().replace('T', ' ').substring(0, 16);
@@ -696,12 +749,12 @@ export default function App() {
             c.name.toLowerCase() === targetInv.customerName?.toLowerCase()
           ) {
             const isUnpaidCredit = targetInv.paymentMethod === 'credit' && !targetInv.creditPaid;
-            const newBal = isUnpaidCredit ? Math.max(0, (c.creditBalance || 0) - targetInv.grandTotal) : (c.creditBalance || 0);
-            const newTotalPurchases = Math.max(0, (c.totalPurchases || 0) - targetInv.grandTotal);
+            const newBal = isUnpaidCredit ? Math.max(0, Math.round(((c.creditBalance || 0) - targetInv.grandTotal) * 100) / 100) : (c.creditBalance || 0);
+            const newTotalSpent = Math.max(0, Math.round(((c.totalSpent || 0) - targetInv.grandTotal) * 100) / 100);
             return {
               ...c,
               creditBalance: newBal,
-              totalPurchases: newTotalPurchases,
+              totalSpent: newTotalSpent,
               expectedPaymentDate: newBal === 0 ? undefined : c.expectedPaymentDate,
             };
           }
@@ -725,6 +778,39 @@ export default function App() {
     setStockTransactions(loadStockTransactions());
     setCategories(loadCategories());
     setDraftCartCount(0);
+  };
+
+  // Pull data from Supabase Cloud
+  const handlePullFromSupabase = async () => {
+    const res = await pullDataFromSupabase();
+    if (res.success && res.data) {
+      if (res.data.products && res.data.products.length > 0) {
+        setProducts(res.data.products);
+        saveProducts(res.data.products);
+      }
+      if (res.data.invoices && res.data.invoices.length > 0) {
+        setInvoices(res.data.invoices);
+        saveInvoices(res.data.invoices);
+      }
+      if (res.data.customers && res.data.customers.length > 0) {
+        setCustomers(res.data.customers);
+        saveCustomers(res.data.customers);
+      }
+      if (res.data.suppliers && res.data.suppliers.length > 0) {
+        setSuppliers(res.data.suppliers);
+        saveSuppliers(res.data.suppliers);
+      }
+      if (res.data.stockTransactions && res.data.stockTransactions.length > 0) {
+        setStockTransactions(res.data.stockTransactions);
+        saveStockTransactions(res.data.stockTransactions);
+      }
+      if (res.data.settings) {
+        setSettings(res.data.settings);
+        saveShopSettings(res.data.settings);
+      }
+      return { success: true };
+    }
+    return { success: false, error: res.error };
   };
 
   // Sign out handler
@@ -759,7 +845,10 @@ export default function App() {
       {/* Main Workspace: Top Bar + Content Canvas */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         {/* Top Header Bar matching Screenshot with Top-Right Logo */}
-        <Header activeTab={activeTab} settings={settings} />
+        <Header
+          activeTab={activeTab}
+          settings={settings}
+        />
 
         {/* Dynamic Main Content Container */}
         <main className="flex-1 h-full min-w-0 overflow-hidden relative flex flex-col bg-slate-50/60">

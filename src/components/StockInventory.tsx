@@ -205,17 +205,11 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
     const otherCats = activeCategories.filter((c) => c.toLowerCase() !== cat.toLowerCase());
     const fallback = otherCats[0] || 'Accessories & Tools';
 
-    if (count > 0) {
-      setDeleteCatModal({
-        category: cat,
-        productCount: count,
-        fallbackCategory: fallback,
-      });
-    } else {
-      if (window.confirm(`Delete category "${cat}"?`)) {
-        onDeleteCategory?.(cat);
-      }
-    }
+    setDeleteCatModal({
+      category: cat,
+      productCount: count,
+      fallbackCategory: fallback,
+    });
   };
 
   const handleConfirmDeleteWithFallback = () => {
@@ -278,11 +272,11 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
       name: formName.trim(),
       category: formCategory,
       skuCode: formSku.trim() || undefined,
-      sellingPrice: Number(formSellingPrice) || 0,
-      purchasePrice: Number(formPurchasePrice) || 0,
-      gstRate: formGstRate === '' ? 0 : (Number(formGstRate) >= 0 ? Number(formGstRate) : 0),
-      stockQty: Number(formStockQty) || 0,
-      minimumStock: Number(formMinStock) || 10,
+      sellingPrice: Math.max(0, Math.round((Number(formSellingPrice) || 0) * 100) / 100),
+      purchasePrice: Math.max(0, Math.round((Number(formPurchasePrice) || 0) * 100) / 100),
+      gstRate: formGstRate === '' ? 0 : Math.max(0, Number(formGstRate) || 0),
+      stockQty: Math.max(0, Math.round((Number(formStockQty) || 0) * 1000) / 1000),
+      minimumStock: Math.max(0, Math.round((Number(formMinStock) || 10) * 1000) / 1000),
       unit: formUnit.trim() || 'pcs',
       supplierId: formSupplierId || undefined,
       supplierName: formSupplierId ? suppliers.find((s) => s.supplierId === formSupplierId)?.companyName : undefined,
@@ -296,8 +290,8 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
 
   const handleConfirmStockAction = () => {
     if (!stockActionModal) return;
-    const qty = Number(stockActionQty);
-    if (isNaN(qty) || qty === 0) return;
+    const qty = Math.abs(Number(stockActionQty) || 0);
+    if (isNaN(qty) || !isFinite(qty) || qty === 0) return;
 
     onUpdateStock(
       stockActionModal.product.productId,
@@ -769,12 +763,12 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
                       </td>
                     </tr>
                   ) : (
-                    filteredProducts.map((prod) => {
+                    filteredProducts.map((prod, pIdx) => {
                       const isLowStock = prod.stockQty <= prod.minimumStock;
                       const supplierObj = suppliers.find((s) => s.supplierId === prod.supplierId);
 
                       return (
-                        <tr key={prod.productId} className="hover:bg-zinc-50 transition-colors">
+                        <tr key={prod.productId ? `${prod.productId}-${pIdx}` : `prod-${pIdx}`} className="hover:bg-zinc-50 transition-colors">
                           <td className="py-3 px-4">
                             <button
                               type="button"
@@ -1119,12 +1113,12 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {filteredTransactions.map((tx) => {
+                      {filteredTransactions.map((tx, tIdx) => {
                         const isPositive = tx.isStockIn;
                         const isNegative = tx.isStockOut;
 
                         return (
-                          <tr key={tx.transactionId} className="hover:bg-slate-50/70 transition-colors">
+                          <tr key={tx.transactionId ? `${tx.transactionId}-${tIdx}` : `tx-desk-${tIdx}`} className="hover:bg-slate-50/70 transition-colors">
                             {/* Date & Time */}
                             <td className="py-3 px-4 text-slate-600 whitespace-nowrap">
                               <div className="flex items-center gap-1.5 font-medium text-slate-800">
@@ -1228,12 +1222,12 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
 
                 {/* Mobile Cards View (< md screens) */}
                 <div className="block md:hidden divide-y divide-slate-100">
-                  {filteredTransactions.map((tx) => {
+                  {filteredTransactions.map((tx, mIdx) => {
                     const isPositive = tx.isStockIn;
                     const isNegative = tx.isStockOut;
 
                     return (
-                      <div key={tx.transactionId} className="p-4 space-y-2.5 hover:bg-slate-50">
+                      <div key={tx.transactionId ? `mob-${tx.transactionId}-${mIdx}` : `tx-mob-${mIdx}`} className="p-4 space-y-2.5 hover:bg-slate-50">
                         {/* Header: Date + Movement Badge */}
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -2024,9 +2018,9 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
                     </span>
                   </div>
                   <div className="space-y-1.5">
-                    {recentMoves.map((tx) => (
+                    {recentMoves.map((tx, idx) => (
                       <div
-                        key={tx.id}
+                        key={tx.transactionId || `recent-move-${idx}`}
                         className="p-2 bg-zinc-50 rounded-lg border border-zinc-100 flex items-center justify-between text-xs"
                       >
                         <div className="flex items-center gap-2">
@@ -2041,7 +2035,7 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
                           >
                             {tx.type.toUpperCase()}
                           </span>
-                          <span className="text-zinc-600 text-[11px]">{tx.date}</span>
+                          <span className="text-zinc-600 text-[11px]">{tx.dateTime}</span>
                           {tx.referenceId && (
                             <span className="text-[10px] font-mono text-zinc-400">
                               Ref: {tx.referenceId}
@@ -2114,10 +2108,17 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
           } else {
             items.forEach(onSaveProduct);
           }
+          // Reset filters so the user immediately sees all updated and newly added products
+          setSearchQuery('');
+          setCategoryFilter('All Items');
+          setSupplierFilter('All Suppliers');
+          setStockStatusFilter('all');
+          setActiveView('products');
+
           setImportNotice(
-            `Successfully imported ${items.length} products (${
+            `Successfully processed ${items.length} products (${
               options.updateExisting ? 'updated matches & added new items' : 'added as new items'
-            }).`
+            }). All products are now up to date in inventory.`
           );
           setTimeout(() => setImportNotice(null), 6000);
         }}
@@ -2344,64 +2345,74 @@ export const StockInventory: React.FC<StockInventoryProps> = ({
         </div>
       )}
 
-      {/* Delete Category Reassignment Modal */}
+      {/* Delete Category Confirmation / Reassignment Modal */}
       {deleteCatModal && (
-        <div className="fixed inset-0 bg-black/60 z-60 flex items-center justify-center p-4 backdrop-blur-xs">
+        <div className="fixed inset-0 bg-black/60 z-70 flex items-center justify-center p-4 backdrop-blur-xs">
           <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-start gap-3">
-              <div className="w-9 h-9 rounded-full bg-red-100 text-red-600 flex items-center justify-center shrink-0">
-                <AlertTriangle className="w-5 h-5" />
+              <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
               </div>
               <div className="space-y-1">
-                <h4 className="font-bold text-slate-900 text-sm">
-                  Delete Category & Reassign Products
+                <h4 className="font-bold text-slate-900 text-base">
+                  Delete Category: "{deleteCatModal.category}"
                 </h4>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  The category <strong className="text-slate-900">"{deleteCatModal.category}"</strong> has{' '}
-                  <strong className="text-orange-600">{deleteCatModal.productCount}</strong> product(s) linked to it.
-                  Select which category to reassign these products to:
-                </p>
+                {deleteCatModal.productCount > 0 ? (
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    This category currently has{' '}
+                    <strong className="text-orange-600 font-bold">{deleteCatModal.productCount}</strong> product(s) linked to it.
+                    Select which category to reassign these products to before deletion:
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Are you sure you want to delete the <strong className="text-slate-900">"{deleteCatModal.category}"</strong> category? No products are currently assigned to this category.
+                  </p>
+                )}
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-700 block">
-                Reassign products to:
-              </label>
-              <select
-                value={deleteCatModal.fallbackCategory}
-                onChange={(e) =>
-                  setDeleteCatModal({
-                    ...deleteCatModal,
-                    fallbackCategory: e.target.value,
-                  })
-                }
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-orange-500"
-              >
-                {activeCategories
-                  .filter((c) => c.toLowerCase() !== deleteCatModal.category.toLowerCase())
-                  .map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-              </select>
-            </div>
+            {deleteCatModal.productCount > 0 && (
+              <div className="space-y-1.5 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                <label className="text-xs font-semibold text-slate-700 block">
+                  Reassign existing products to:
+                </label>
+                <select
+                  value={deleteCatModal.fallbackCategory}
+                  onChange={(e) =>
+                    setDeleteCatModal({
+                      ...deleteCatModal,
+                      fallbackCategory: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-orange-500 cursor-pointer"
+                >
+                  {activeCategories
+                    .filter((c) => c.toLowerCase() !== deleteCatModal.category.toLowerCase())
+                    .map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
 
-            <div className="pt-2 flex justify-end gap-2">
+            <div className="pt-2 flex justify-end gap-2 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setDeleteCatModal(null)}
-                className="px-3.5 py-1.5 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50 transition-colors"
+                className="px-4 py-2 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
+                id="btn-confirm-delete-category"
                 onClick={handleConfirmDeleteWithFallback}
-                className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
               >
-                Reassign & Delete
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{deleteCatModal.productCount > 0 ? 'Reassign & Delete' : 'Delete Category'}</span>
               </button>
             </div>
           </div>

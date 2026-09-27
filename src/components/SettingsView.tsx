@@ -17,7 +17,6 @@ import {
   KeyRound,
   Eye,
   EyeOff,
-  UserPlus,
   Keyboard,
   Search,
   Banknote,
@@ -47,13 +46,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Admin credentials state
+  // Admin credentials state (Single Admin)
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>(() => loadAdminUsers());
-  const [showAddAdmin, setShowAddAdmin] = useState(false);
-  const [newAdminId, setNewAdminId] = useState('');
-  const [newAdminPassword, setNewAdminPassword] = useState('');
-  const [newAdminError, setNewAdminError] = useState('');
-  const [newAdminSuccess, setNewAdminSuccess] = useState('');
 
   // Change password state
   const [changingPasswordUser, setChangingPasswordUser] = useState<string | null>(null);
@@ -63,46 +57,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const refreshAdmins = () => {
     setAdminUsers(loadAdminUsers());
-  };
-
-  const handleCreateAdminInSettings = (e: React.FormEvent) => {
-    e.preventDefault();
-    setNewAdminError('');
-    setNewAdminSuccess('');
-
-    const cleanId = newAdminId.trim().toLowerCase();
-
-    if (!cleanId || cleanId.length < 3) {
-      setNewAdminError('Admin ID must be at least 3 characters');
-      return;
-    }
-    if (!newAdminPassword || newAdminPassword.length < 4) {
-      setNewAdminError('Password must be at least 4 characters');
-      return;
-    }
-
-    if (adminUsers.some((u) => u.adminId.toLowerCase() === cleanId)) {
-      setNewAdminError(`Admin ID "${cleanId}" already exists`);
-      return;
-    }
-
-    const newUser: AdminUser = {
-      adminId: cleanId,
-      name: cleanId,
-      password: newAdminPassword,
-      role: 'admin',
-      createdAt: new Date().toISOString(),
-    };
-
-    saveAdminUser(newUser);
-    refreshAdmins();
-    setNewAdminId('');
-    setNewAdminPassword('');
-    setNewAdminSuccess(`Admin "${cleanId}" created successfully!`);
-    setTimeout(() => {
-      setShowAddAdmin(false);
-      setNewAdminSuccess('');
-    }, 1500);
   };
 
   const handleSaveNewPassword = (adminId: string) => {
@@ -549,7 +503,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 type="email"
                 value={formData.email || ''}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                placeholder="e.g. ivar.chandru@gmail.com"
+                placeholder="e.g. shop@example.com"
                 className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg font-medium focus:outline-none focus:border-orange-500"
               />
             </div>
@@ -675,88 +629,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* ADMIN ACCOUNTS & AUTHENTICATION */}
+        {/* ADMIN ACCOUNT & PASSWORD AUTHENTICATION */}
         <div className="bg-white rounded-xl p-5 shadow-xs border border-zinc-200 space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-orange-500" />
               <h2 className="text-sm font-bold text-zinc-950">
-                Admin ID & Password Authentication
+                Admin Authentication Credentials
               </h2>
             </div>
-            <button
-              type="button"
-              id="btn-open-add-admin"
-              onClick={() => setShowAddAdmin(!showAddAdmin)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-700 text-xs font-semibold border border-orange-200 cursor-pointer transition-colors"
-            >
-              <UserPlus className="w-3.5 h-3.5" />
-              <span>{showAddAdmin ? 'Cancel' : 'Create New Admin ID'}</span>
-            </button>
+            <span className="text-[11px] text-zinc-500 font-mono bg-zinc-100 px-2.5 py-0.5 rounded-md">
+              Primary Admin Account
+            </span>
           </div>
-
-          {/* Form to create new admin ID right in settings */}
-          {showAddAdmin && (
-            <div className="p-4 bg-orange-50/50 border border-orange-200 rounded-xl space-y-3">
-              <h3 className="text-xs font-bold text-orange-950 flex items-center gap-1.5">
-                <UserPlus className="w-3.5 h-3.5 text-orange-600" />
-                <span>Create New Admin Account</span>
-              </h3>
-
-              {newAdminError && (
-                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
-                  <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                  <span>{newAdminError}</span>
-                </div>
-              )}
-              {newAdminSuccess && (
-                <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700 flex items-center gap-2">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                  <span>{newAdminSuccess}</span>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <div>
-                  <label className="font-semibold text-zinc-700 block mb-1">New Admin ID</label>
-                  <input
-                    type="text"
-                    value={newAdminId}
-                    onChange={(e) => setNewAdminId(e.target.value.toLowerCase().replace(/\s+/g, ''))}
-                    placeholder="e.g. admin2, chandru"
-                    className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-lg font-mono focus:outline-none focus:border-orange-500"
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold text-zinc-700 block mb-1">Password</label>
-                  <input
-                    type="password"
-                    value={newAdminPassword}
-                    onChange={(e) => setNewAdminPassword(e.target.value)}
-                    placeholder="Create a password"
-                    className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-lg focus:outline-none focus:border-orange-500"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowAddAdmin(false)}
-                  className="px-3 py-1.5 bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 rounded-lg text-xs font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCreateAdminInSettings}
-                  className="px-4 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold cursor-pointer"
-                >
-                  Save New Admin
-                </button>
-              </div>
-            </div>
-          )}
 
           {passwordChangeSuccess && (
             <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700 flex items-center gap-2">
@@ -765,20 +650,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           )}
 
-          {/* List of registered Admin users */}
-          <div className="divide-y divide-zinc-100 border border-zinc-200 rounded-xl overflow-hidden text-xs">
-            {adminUsers.map((admin) => {
+          {/* Admin User Card & Password Management */}
+          <div className="border border-zinc-200 rounded-xl overflow-hidden text-xs">
+            {adminUsers.slice(0, 1).map((admin) => {
               const isEditingThis = changingPasswordUser === admin.adminId;
               return (
-                <div key={admin.adminId} className="p-3 bg-zinc-50/60 hover:bg-zinc-50 transition-colors">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
+                <div key={admin.adminId} className="p-4 bg-zinc-50/60 transition-colors">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-orange-100 border border-orange-200 text-orange-700 flex items-center justify-center font-bold text-xs font-mono">
+                      <div className="w-9 h-9 rounded-xl bg-orange-100 border border-orange-200 text-orange-700 flex items-center justify-center font-bold text-sm font-mono shadow-2xs">
                         {admin.adminId.charAt(0).toUpperCase()}
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-zinc-900 font-mono text-xs">
+                          <span className="font-bold text-zinc-900 font-mono text-sm">
                             {admin.adminId}
                           </span>
                           <span className="px-2 py-0.5 rounded-md bg-orange-100 text-orange-800 text-[10.5px] font-semibold">
@@ -786,7 +671,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           </span>
                         </div>
                         <span className="text-[11px] text-zinc-400">
-                          Role: Administrator • Created: {new Date(admin.createdAt).toLocaleDateString()}
+                          Role: Administrator • Single Login ID & Password
                         </span>
                       </div>
                     </div>
@@ -801,18 +686,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           setNewPasswordVal('');
                         }
                       }}
-                      className="px-3 py-1 bg-white border border-zinc-200 hover:bg-zinc-100 text-zinc-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                      className="px-3 py-1.5 bg-white border border-zinc-200 hover:bg-zinc-100 text-zinc-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
                     >
                       <KeyRound className="w-3.5 h-3.5 text-orange-500" />
-                      <span>{isEditingThis ? 'Close' : 'Change Password'}</span>
+                      <span>{isEditingThis ? 'Cancel' : 'Change Password'}</span>
                     </button>
                   </div>
 
                   {/* Inline Change Password Box */}
                   {isEditingThis && (
-                    <div className="mt-3 pt-3 border-t border-zinc-200 flex flex-wrap items-center gap-2">
+                    <div className="mt-4 pt-3.5 border-t border-zinc-200 flex flex-wrap items-center gap-2.5">
                       <span className="text-xs font-semibold text-zinc-700 shrink-0">
-                        New Password for {admin.adminId}:
+                        New Password:
                       </span>
                       <div className="relative">
                         <input
@@ -820,12 +705,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                           value={newPasswordVal}
                           onChange={(e) => setNewPasswordVal(e.target.value)}
                           placeholder="Enter new password"
-                          className="px-3 py-1.5 pr-8 bg-white border border-zinc-300 rounded-lg text-xs font-medium focus:outline-none focus:border-orange-500"
+                          className="px-3 py-1.5 pr-8 bg-white border border-zinc-300 rounded-lg text-xs font-medium focus:outline-none focus:border-orange-500 min-w-[200px]"
                         />
                         <button
                           type="button"
                           onClick={() => setShowPasswordVal(!showPasswordVal)}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer"
                         >
                           {showPasswordVal ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </button>
@@ -833,7 +718,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <button
                         type="button"
                         onClick={() => handleSaveNewPassword(admin.adminId)}
-                        className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                        className="px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 active:scale-[0.99] text-white rounded-lg text-xs font-bold cursor-pointer transition-all shadow-2xs"
                       >
                         Update Password
                       </button>
@@ -1016,14 +901,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             type="button"
             id="btn-reset-demo-data"
             onClick={() => {
-              if (window.confirm('Reset all products, sample bills, and settings to original state?')) {
+              if (window.confirm('Are you sure you want to clear all products, invoices, customers, and suppliers to start with a fresh clean store?')) {
                 onResetData();
               }
             }}
-            className="text-xs text-zinc-500 hover:text-black font-medium flex items-center gap-1.5 p-2 rounded-lg transition-colors"
+            className="text-xs text-rose-600 hover:text-rose-800 font-medium flex items-center gap-1.5 p-2 rounded-lg transition-colors cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            Reset To Demo Samples
+            Clear All Store Data (Factory Reset)
           </button>
 
           <button

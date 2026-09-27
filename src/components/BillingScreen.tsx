@@ -170,8 +170,8 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({});
   const [focusedCartProductId, setFocusedCartProductId] = useState<string | null>(null);
 
-  // GST Mode: Cash Memo (Default) vs GST Tax Invoice (Optional)
-  const [isGstBill, setIsGstBill] = useState(() => initialDraft?.isGstBill ?? (settings.defaultGstOn ?? false));
+  // GST Mode: Cash Memo (Default) vs GST Tax Invoice (Optional) - Default is strictly Cash Memo
+  const [isGstBill, setIsGstBill] = useState(() => initialDraft?.isGstBill ?? false);
 
   // Customer State
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(() => initialDraft?.selectedCustomerId || 'walk-in');
@@ -287,7 +287,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
 
   // Financial Calculations
   const subtotal = useMemo(() => {
-    return cartItems.reduce((sum, item) => sum + item.lineTotal, 0);
+    return Math.round(cartItems.reduce((sum, item) => sum + (item.lineTotal || 0), 0) * 100) / 100;
   }, [cartItems]);
 
   const { discountAmount, effectiveDiscountPercent } = useMemo(() => {
@@ -631,14 +631,29 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
         return;
       }
 
-      // 10. Clear Cart: Alt+X
+      // 10. Switch between Cash Memo & GST Bill: Alt+G, Alt+T, Alt+M, Ctrl+G, F11
+      if (
+        (isAlt && (key === 'g' || code === 'KeyG' || key === 't' || code === 'KeyT' || key === 'm' || code === 'KeyM')) ||
+        (isCmdOrCtrl && (key === 'g' || code === 'KeyG')) ||
+        e.key === 'F11'
+      ) {
+        e.preventDefault();
+        if (isAlt && (key === 'm' || code === 'KeyM')) {
+          handleToggleGstBillRef.current(false);
+        } else {
+          handleToggleGstBillRef.current();
+        }
+        return;
+      }
+
+      // 11. Clear Cart: Alt+X
       if (isAlt && (key === 'x' || code === 'KeyX')) {
         e.preventDefault();
         handleClearCart();
         return;
       }
 
-      // 11. Escape: Close help modal, close search dropdown, return to search input
+      // 12. Escape: Close help modal, close search dropdown, return to search input
       if (e.key === 'Escape') {
         if (showShortcutsHelp) {
           e.preventDefault();
@@ -683,18 +698,19 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     shouldFocusQty = true
   ) => {
     addRecentProduct(product.productId);
-    const price = customPrice !== undefined && customPrice >= 0 ? customPrice : product.sellingPrice;
+    const price = customPrice !== undefined && customPrice >= 0 ? Math.round(customPrice * 100) / 100 : product.sellingPrice;
+    const cleanQty = Math.max(0.001, customQty);
     setCartItems((prev) => {
       const match = prev.find((item) => item.productId === product.productId);
       if (match) {
-        const newQty = match.quantity + customQty;
+        const newQty = Math.round((match.quantity + cleanQty) * 1000) / 1000;
         return prev.map((item) =>
           item.productId === product.productId
             ? {
                 ...item,
                 quantity: newQty,
                 unitPrice: price,
-                lineTotal: newQty * price,
+                lineTotal: Math.round(newQty * price * 100) / 100,
               }
             : item
         );
@@ -704,11 +720,11 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
         {
           productId: product.productId,
           productNameSnapshot: product.name,
-          quantity: customQty,
+          quantity: cleanQty,
           unitPrice: price,
           purchasePrice: product.purchasePrice,
           costPrice: product.purchasePrice,
-          lineTotal: customQty * price,
+          lineTotal: Math.round(cleanQty * price * 100) / 100,
           gstRate: isGstBill ? product.gstRate : 0,
           unit: product.unit,
           hsnCode: product.hsnCode,
@@ -769,14 +785,15 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
 
   // Set Quantity directly from keyboard input
   const handleSetQty = (productId: string, newQty: number) => {
-    if (isNaN(newQty) || newQty <= 0) return;
+    if (isNaN(newQty) || !isFinite(newQty) || newQty <= 0) return;
+    const cleanQty = Math.round(newQty * 1000) / 1000;
     setCartItems((prev) =>
       prev.map((item) =>
         item.productId === productId
           ? {
               ...item,
-              quantity: newQty,
-              lineTotal: newQty * item.unitPrice,
+              quantity: cleanQty,
+              lineTotal: Math.round(cleanQty * item.unitPrice * 100) / 100,
             }
           : item
       )
@@ -945,11 +962,11 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       }
       return prev.map((item) => {
         if (item.productId === productId) {
-          const newQty = item.quantity + delta;
+          const newQty = Math.max(0.01, Math.round((item.quantity + delta) * 1000) / 1000);
           return {
             ...item,
             quantity: newQty,
-            lineTotal: newQty * item.unitPrice,
+            lineTotal: Math.round(newQty * item.unitPrice * 100) / 100,
           };
         }
         return item;
@@ -964,14 +981,15 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
 
   // Edit Unit Price directly (for Electrician / Contractor discount)
   const handleUpdatePrice = (productId: string, newPrice: number) => {
-    if (newPrice < 0) return;
+    if (isNaN(newPrice) || !isFinite(newPrice) || newPrice < 0) return;
+    const cleanPrice = Math.round(newPrice * 100) / 100;
     setCartItems((prev) =>
       prev.map((item) =>
         item.productId === productId
           ? {
               ...item,
-              unitPrice: newPrice,
-              lineTotal: item.quantity * newPrice,
+              unitPrice: cleanPrice,
+              lineTotal: Math.round(item.quantity * cleanPrice * 100) / 100,
             }
           : item
       )
@@ -1067,7 +1085,35 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
   const cashNum = parseFloat(cashTendered) || 0;
   const changeDue = cashNum > 0 ? Math.max(0, cashNum - grandTotal) : 0;
 
+  // Switch / Toggle between Cash Memo (Default) and GST Tax Bill
+  const handleToggleGstBill = (forceMode?: boolean) => {
+    const nextMode = forceMode !== undefined ? forceMode : !isGstBill;
+    setIsGstBill(nextMode);
+    setCartItems((prev) =>
+      prev.map((item) => {
+        if (!nextMode) {
+          return {
+            ...item,
+            gstRate: 0,
+          };
+        } else {
+          const matchedProd = products.find((p) => p.productId === item.productId);
+          return {
+            ...item,
+            gstRate: matchedProd?.gstRate ?? item.gstRate ?? 0,
+          };
+        }
+      })
+    );
+    showToast(
+      nextMode
+        ? 'Switched to GST Tax Bill (Alt+G) • Rates & Tax Breakdown Applied'
+        : 'Switched to Cash Memo (Default) • Non-tax Invoice'
+    );
+  };
 
+  const handleToggleGstBillRef = useRef(handleToggleGstBill);
+  handleToggleGstBillRef.current = handleToggleGstBill;
 
   // Clear Cart & Reset for Next Customer:
   // Every product is deleted from the invoice section ONLY when Clear All is clicked!
@@ -1087,7 +1133,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     setCustomerAddress('');
     setCustomerGstin('');
     setCustomerCategory('walk-in');
-    setIsGstBill(settings.defaultGstOn ?? false);
+    setIsGstBill(false);
     showToast(itemCount > 0 ? 'All products deleted. New invoice ready.' : 'Invoice reset for new customer.');
   };
 
@@ -1145,7 +1191,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     setCustomerAddress('');
     setCustomerGstin('');
     setCustomerCategory('walk-in');
-    setIsGstBill(settings.defaultGstOn ?? false);
+    setIsGstBill(false);
 
     showToast(`Bill (${newHeld.customerName}) held! Blank bill ready.`);
     setTimeout(() => searchInputRef.current?.focus(), 50);
@@ -1352,7 +1398,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       setIsCustomerSearchOpen(false);
       setPaymentMethod('cash');
       setPaymentDueDate('');
-      setIsGstBill(settings.defaultGstOn ?? false);
+      setIsGstBill(false);
 
       showToast(`Bill #${invoiceToSave.invoiceNumber} recorded & printed! Cart refreshed.`);
       scrollToTop();
@@ -1400,47 +1446,38 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
             <button
               type="button"
               id="btn-mode-cash-memo"
-              onClick={() => {
-                setIsGstBill(false);
-                setCartItems((prev) =>
-                  prev.map((item) => ({
-                    ...item,
-                    gstRate: 0,
-                  }))
-                );
-              }}
-              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer font-medium ${
+              onClick={() => handleToggleGstBill(false)}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer font-medium flex items-center gap-1.5 ${
                 !isGstBill
                   ? 'bg-white text-slate-900 shadow-xs font-bold'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
-              title="Cash Memo (Default non-tax invoice)"
+              title="Cash Memo (Default non-tax invoice) • Press Alt+G to switch"
             >
-              Cash Memo (Default)
+              <span>Cash Memo (Default)</span>
+              {!isGstBill && (
+                <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-700 px-1.5 py-0.2 rounded border border-slate-300">
+                  Active
+                </span>
+              )}
             </button>
             <button
               type="button"
               id="btn-mode-gst-bill"
-              onClick={() => {
-                setIsGstBill(true);
-                setCartItems((prev) =>
-                  prev.map((item) => {
-                    const matchedProd = products.find((p) => p.productId === item.productId);
-                    return {
-                      ...item,
-                      gstRate: matchedProd?.gstRate ?? item.gstRate ?? 0,
-                    };
-                  })
-                );
-              }}
-              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer font-medium ${
+              onClick={() => handleToggleGstBill(true)}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer font-medium flex items-center gap-1.5 ${
                 isGstBill
                   ? 'bg-orange-500 text-white shadow-xs font-bold'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
-              title="GST Bill (Optional for B2B or GST registered customers)"
+              title="GST Bill (Tax Invoice) • Press Alt+G to switch"
             >
-              GST Bill (Optional)
+              <span>GST Bill</span>
+              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${
+                isGstBill ? 'bg-orange-600 text-white' : 'text-slate-600 bg-white border border-slate-300'
+              }`}>
+                Alt+G
+              </span>
             </button>
           </div>
         </div>
@@ -2979,6 +3016,12 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
                       <span>Enter Discount amount/percent</span>
                       <kbd className="font-mono font-bold bg-slate-100 text-slate-900 px-2 py-0.5 rounded border border-slate-300">
                         Alt+D
+                      </kbd>
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span className="font-semibold text-orange-950">Switch Cash Memo / GST Bill (Default: Cash Memo)</span>
+                      <kbd className="font-mono font-bold bg-orange-100 text-orange-800 px-2 py-0.5 rounded border border-orange-300">
+                        Alt+G
                       </kbd>
                     </div>
                     <div className="px-3 py-2 flex items-center justify-between">

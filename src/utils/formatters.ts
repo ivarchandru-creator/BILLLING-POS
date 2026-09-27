@@ -1,16 +1,16 @@
 import { Invoice, PaymentMethod } from '../types';
 import { LOGO_URL } from './logoData';
 
-export function formatINR(amount: number): string {
-  if (isNaN(amount)) return '₹0.00';
+export function formatINR(amount: number | null | undefined): string {
+  if (typeof amount !== 'number' || isNaN(amount) || !isFinite(amount)) return '₹0.00';
   return `₹${amount.toLocaleString('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
 }
 
-export function formatINRCompact(amount: number): string {
-  if (isNaN(amount)) return '₹0';
+export function formatINRCompact(amount: number | null | undefined): string {
+  if (typeof amount !== 'number' || isNaN(amount) || !isFinite(amount)) return '₹0';
   return `₹${amount.toLocaleString('en-IN', {
     maximumFractionDigits: 0,
   })}`;
@@ -126,11 +126,12 @@ export function formatInvoiceDateTime(dateTimeStr?: string): string {
   return date || time || dateTimeStr;
 }
 
-export function getInvoiceDiscount(inv: Invoice): number {
-  if (typeof inv.discountAmount === 'number' && inv.discountAmount >= 0) {
-    return inv.discountAmount;
+export function getInvoiceDiscount(inv?: Invoice | null): number {
+  if (!inv) return 0;
+  if (typeof inv.discountAmount === 'number' && isFinite(inv.discountAmount) && inv.discountAmount >= 0) {
+    return Math.round(inv.discountAmount * 100) / 100;
   }
-  if (typeof inv.discountPercent === 'number' && inv.discountPercent > 0 && inv.subtotal) {
+  if (typeof inv.discountPercent === 'number' && isFinite(inv.discountPercent) && inv.discountPercent > 0 && typeof inv.subtotal === 'number' && isFinite(inv.subtotal)) {
     return Math.round(((inv.subtotal * inv.discountPercent) / 100) * 100) / 100;
   }
   return 0;

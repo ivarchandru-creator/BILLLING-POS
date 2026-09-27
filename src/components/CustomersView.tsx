@@ -150,7 +150,7 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
         siteAddress: formSiteAddress.trim() || formAddress.trim() || undefined,
         gstin: formGstin.trim() || undefined,
         customerType: formType,
-        creditBalance: Number(formCredit) || 0,
+        creditBalance: Math.max(0, Math.round((Number(formCredit) || 0) * 100) / 100),
         expectedPaymentDate: formDueDate || undefined,
         totalSpent: 0,
       };
@@ -163,18 +163,18 @@ export const CustomersView: React.FC<CustomersViewProps> = ({
 
   const handleConfirmCreditPayment = () => {
     if (!payingCustomer) return;
-    const payNum = parseFloat(customPayAmount) || 0;
+    const payNum = Math.round((parseFloat(customPayAmount) || 0) * 100) / 100;
     if (payNum <= 0) {
       showToast('Please enter a valid payment amount greater than ₹0.');
       return;
     }
-    const currentDue = payingCustomer.creditBalance || 0;
+    const currentDue = Math.round((payingCustomer.creditBalance || 0) * 100) / 100;
     if (payNum > currentDue) {
       showToast(`Payment amount cannot exceed current due (${formatINR(currentDue)}).`);
       return;
     }
 
-    const newBalance = Math.max(0, currentDue - payNum);
+    const newBalance = Math.max(0, Math.round((currentDue - payNum) * 100) / 100);
     const updatedCust: Customer = {
       ...payingCustomer,
       creditBalance: newBalance,

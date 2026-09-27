@@ -1,12 +1,6 @@
 import { Product, Supplier, SupplierTransaction, Invoice, ShopSettings, StockTransaction, Customer, DraftBillingState, HeldInvoice } from '../types';
 import {
-  INITIAL_PRODUCTS,
-  INITIAL_SUPPLIERS,
-  INITIAL_SUPPLIER_TRANSACTIONS,
-  INITIAL_INVOICES,
   INITIAL_SHOP_SETTINGS,
-  INITIAL_STOCK_TRANSACTIONS,
-  INITIAL_CUSTOMERS,
 } from '../data/electricalShopData';
 
 const STORAGE_KEYS = {
@@ -23,6 +17,8 @@ const STORAGE_KEYS = {
   RECENT_PRODUCTS: 'elec_shop_recent_billing_products_v1',
 };
 
+const CLEAN_DATA_FLAG_KEY = 'elec_shop_clean_data_initialized_v5';
+
 export const DEFAULT_PRODUCT_CATEGORIES = [
   'Switches & Sockets',
   'Wires & Cables',
@@ -33,12 +29,50 @@ export const DEFAULT_PRODUCT_CATEGORIES = [
   'Accessories & Tools',
 ];
 
+/**
+ * Automatically purges legacy mock data on first load so the app is completely clean.
+ */
+export function initializeCleanStore(): void {
+  try {
+    const isCleaned = localStorage.getItem(CLEAN_DATA_FLAG_KEY);
+    if (!isCleaned) {
+      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEYS.SUPPLIERS, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEYS.SUPPLIER_TX, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEYS.STOCK_TX, JSON.stringify([]));
+      localStorage.removeItem(STORAGE_KEYS.DRAFT_BILL);
+      localStorage.setItem(STORAGE_KEYS.HELD_BILLS, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEYS.RECENT_PRODUCTS, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(DEFAULT_PRODUCT_CATEGORIES));
+      localStorage.setItem(CLEAN_DATA_FLAG_KEY, 'true');
+    }
+  } catch (e) {
+    console.error('Error initializing clean store', e);
+  }
+}
+
+// Run immediately
+initializeCleanStore();
+
 export function loadProducts(): Product[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
-    return raw ? JSON.parse(raw) : INITIAL_PRODUCTS;
+    if (!raw) return [];
+    const parsed: Product[] = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((p) => ({
+      ...p,
+      sellingPrice: typeof p.sellingPrice === 'number' && isFinite(p.sellingPrice) ? Math.max(0, Math.round(p.sellingPrice * 100) / 100) : 0,
+      purchasePrice: typeof p.purchasePrice === 'number' && isFinite(p.purchasePrice) ? Math.max(0, Math.round(p.purchasePrice * 100) / 100) : 0,
+      stockQty: typeof p.stockQty === 'number' && isFinite(p.stockQty) ? Math.max(0, p.stockQty) : 0,
+      minimumStock: typeof p.minimumStock === 'number' && isFinite(p.minimumStock) ? Math.max(0, p.minimumStock) : 10,
+      gstRate: typeof p.gstRate === 'number' && isFinite(p.gstRate) ? Math.max(0, p.gstRate) : 0,
+      activeStatus: p.activeStatus !== false,
+    }));
   } catch {
-    return INITIAL_PRODUCTS;
+    return [];
   }
 }
 
@@ -53,26 +87,29 @@ export function saveProducts(products: Product[]): void {
 export function loadInvoices(): Invoice[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.INVOICES);
-    if (!raw) return INITIAL_INVOICES;
+    if (!raw) return [];
     const parsed: any[] = JSON.parse(raw);
-    const normalized = parsed.map((inv) => ({
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((inv) => ({
       ...inv,
+      subtotal: typeof inv.subtotal === 'number' && isFinite(inv.subtotal) ? Math.round(inv.subtotal * 100) / 100 : 0,
+      grandTotal: typeof inv.grandTotal === 'number' && isFinite(inv.grandTotal) ? Math.round(inv.grandTotal * 100) / 100 : 0,
+      gstAmount: typeof inv.gstAmount === 'number' && isFinite(inv.gstAmount) ? Math.round(inv.gstAmount * 100) / 100 : 0,
+      cgstAmount: typeof inv.cgstAmount === 'number' && isFinite(inv.cgstAmount) ? Math.round(inv.cgstAmount * 100) / 100 : 0,
+      sgstAmount: typeof inv.sgstAmount === 'number' && isFinite(inv.sgstAmount) ? Math.round(inv.sgstAmount * 100) / 100 : 0,
+      discountAmount: typeof inv.discountAmount === 'number' && isFinite(inv.discountAmount) ? Math.max(0, Math.round(inv.discountAmount * 100) / 100) : 0,
+      items: Array.isArray(inv.items)
+        ? inv.items.map((it: any) => ({
+            ...it,
+            quantity: typeof it.quantity === 'number' && isFinite(it.quantity) ? it.quantity : 1,
+            unitPrice: typeof it.unitPrice === 'number' && isFinite(it.unitPrice) ? Math.round(it.unitPrice * 100) / 100 : 0,
+            lineTotal: typeof it.lineTotal === 'number' && isFinite(it.lineTotal) ? Math.round(it.lineTotal * 100) / 100 : Math.round(((it.quantity || 1) * (it.unitPrice || 0)) * 100) / 100,
+          }))
+        : [],
       printerType: inv.printerType === 'laser' ? 'ink' : (inv.printerType || 'ink'),
     }));
-    // Ensure multi-page sample invoice inv-1005 is included for instant testing
-    const hasInv1005 = normalized.some((inv) => inv.invoiceId === 'inv-1005');
-    if (!hasInv1005) {
-      const sample = INITIAL_INVOICES.find((i) => i.invoiceId === 'inv-1005');
-      if (sample) {
-        normalized.unshift(sample);
-        try {
-          localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(normalized));
-        } catch {}
-      }
-    }
-    return normalized;
   } catch {
-    return INITIAL_INVOICES;
+    return [];
   }
 }
 
@@ -87,17 +124,15 @@ export function saveInvoices(invoices: Invoice[]): void {
 export function loadSuppliers(): Supplier[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.SUPPLIERS);
-    if (!raw) return INITIAL_SUPPLIERS;
+    if (!raw) return [];
     const parsed: Supplier[] = JSON.parse(raw);
-    return parsed.map((s) => {
-      const initialMatch = INITIAL_SUPPLIERS.find((init) => init.supplierId === s.supplierId);
-      return {
-        ...s,
-        balance: typeof s.balance === 'number' ? s.balance : (initialMatch?.balance ?? 0),
-      };
-    });
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((s) => ({
+      ...s,
+      balance: typeof s.balance === 'number' && isFinite(s.balance) ? Math.round(s.balance * 100) / 100 : 0,
+    }));
   } catch {
-    return INITIAL_SUPPLIERS;
+    return [];
   }
 }
 
@@ -112,9 +147,9 @@ export function saveSuppliers(suppliers: Supplier[]): void {
 export function loadSupplierTransactions(): SupplierTransaction[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.SUPPLIER_TX);
-    return raw ? JSON.parse(raw) : INITIAL_SUPPLIER_TRANSACTIONS;
+    return raw ? JSON.parse(raw) : [];
   } catch {
-    return INITIAL_SUPPLIER_TRANSACTIONS;
+    return [];
   }
 }
 
@@ -129,9 +164,16 @@ export function saveSupplierTransactions(transactions: SupplierTransaction[]): v
 export function loadCustomers(): Customer[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
-    return raw ? JSON.parse(raw) : INITIAL_CUSTOMERS;
+    if (!raw) return [];
+    const parsed: Customer[] = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((c) => ({
+      ...c,
+      creditBalance: typeof c.creditBalance === 'number' && isFinite(c.creditBalance) ? Math.max(0, Math.round(c.creditBalance * 100) / 100) : 0,
+      totalSpent: typeof c.totalSpent === 'number' && isFinite(c.totalSpent) ? Math.max(0, Math.round(c.totalSpent * 100) / 100) : 0,
+    }));
   } catch {
-    return INITIAL_CUSTOMERS;
+    return [];
   }
 }
 
@@ -171,7 +213,8 @@ export function loadShopSettings(): ShopSettings {
     if (!merged.tagline || merged.tagline === 'Electricals, Pipes & Hardware Retail') {
       merged.tagline = 'Your trusted electrical partner';
     }
-    // Default should be ink printer. Migrate old default from previous sessions:
+
+    // Default printer: ink
     const inkMigrated = localStorage.getItem('srisenthur_default_printer_ink_v1');
     if (!inkMigrated) {
       merged.defaultPrinterType = 'ink';
@@ -190,7 +233,7 @@ export function loadShopSettings(): ShopSettings {
       }
     }
 
-    // Default should be Cash Memo (defaultGstOn: false). Migrate old default:
+    // Default cash memo (defaultGstOn: false)
     const cashMemoMigrated = localStorage.getItem('srisenthur_default_cash_memo_v1');
     if (!cashMemoMigrated) {
       merged.defaultGstOn = false;
@@ -203,6 +246,14 @@ export function loadShopSettings(): ShopSettings {
     }
     if (merged.upiId !== undefined) {
       delete merged.upiId;
+      try {
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
+      } catch {
+        // ignore
+      }
+    }
+    if (merged.email === 'ivar.chandru@gmail.com') {
+      merged.email = '';
       try {
         localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
       } catch {
@@ -226,9 +277,9 @@ export function saveShopSettings(settings: ShopSettings): void {
 export function loadStockTransactions(): StockTransaction[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.STOCK_TX);
-    return raw ? JSON.parse(raw) : INITIAL_STOCK_TRANSACTIONS;
+    return raw ? JSON.parse(raw) : [];
   } catch {
-    return INITIAL_STOCK_TRANSACTIONS;
+    return [];
   }
 }
 
@@ -286,7 +337,6 @@ export function loadCategories(): string[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
     let cats: string[] = raw ? JSON.parse(raw) : [...DEFAULT_PRODUCT_CATEGORIES];
-    // Also include any categories present on existing products
     const products = loadProducts();
     products.forEach((p) => {
       if (p.category && !cats.some((c) => c.trim().toLowerCase() === p.category.trim().toLowerCase())) {
@@ -326,13 +376,25 @@ export function saveRecentBillingProductIds(ids: string[]): void {
   }
 }
 
-export function resetToDemoData(): void {
-  localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(INITIAL_PRODUCTS));
-  localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify(INITIAL_INVOICES));
-  localStorage.setItem(STORAGE_KEYS.SUPPLIERS, JSON.stringify(INITIAL_SUPPLIERS));
-  localStorage.setItem(STORAGE_KEYS.SUPPLIER_TX, JSON.stringify(INITIAL_SUPPLIER_TRANSACTIONS));
-  localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(INITIAL_SHOP_SETTINGS));
-  localStorage.setItem(STORAGE_KEYS.STOCK_TX, JSON.stringify(INITIAL_STOCK_TRANSACTIONS));
-  localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(DEFAULT_PRODUCT_CATEGORIES));
-  localStorage.removeItem(STORAGE_KEYS.DRAFT_BILL);
+/**
+ * Resets the entire store to a pristine, clean empty state (Zero mock data).
+ */
+export function clearAllStoreData(): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.INVOICES, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.SUPPLIERS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.SUPPLIER_TX, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.STOCK_TX, JSON.stringify([]));
+    localStorage.removeItem(STORAGE_KEYS.DRAFT_BILL);
+    localStorage.setItem(STORAGE_KEYS.HELD_BILLS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.RECENT_PRODUCTS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(DEFAULT_PRODUCT_CATEGORIES));
+    localStorage.setItem(CLEAN_DATA_FLAG_KEY, 'true');
+  } catch (e) {
+    console.error('Failed to clear store data', e);
+  }
 }
+
+export const resetToDemoData = clearAllStoreData;

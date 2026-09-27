@@ -202,11 +202,11 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
     e.preventDefault();
     if (!payModalSupplier) return;
 
-    const amountNum = parseFloat(payAmount);
+    const amountNum = Math.round((parseFloat(payAmount) || 0) * 100) / 100;
     if (isNaN(amountNum) || amountNum <= 0) return;
 
-    const currentBalance = payModalSupplier.balance || 0;
-    const newBalance = Number((currentBalance - amountNum).toFixed(2));
+    const currentBalance = Math.round((payModalSupplier.balance || 0) * 100) / 100;
+    const newBalance = Math.round((currentBalance - amountNum) * 100) / 100;
 
     const updatedSupplier: Supplier = {
       ...payModalSupplier,
@@ -243,11 +243,11 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
     e.preventDefault();
     if (!selectedSupplierDetails) return;
 
-    const amountNum = parseFloat(billAmount);
+    const amountNum = Math.round((parseFloat(billAmount) || 0) * 100) / 100;
     if (isNaN(amountNum) || amountNum <= 0) return;
 
-    const currentBalance = selectedSupplierDetails.balance || 0;
-    const newBalance = Number((currentBalance + amountNum).toFixed(2));
+    const currentBalance = Math.round((selectedSupplierDetails.balance || 0) * 100) / 100;
+    const newBalance = Math.round((currentBalance + amountNum) * 100) / 100;
 
     const updatedSupplier: Supplier = {
       ...selectedSupplierDetails,
@@ -351,10 +351,6 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
     return suppliers.filter((s) => (s.balance || 0) > 0).length;
   }, [suppliers]);
 
-  const gstRegisteredCount = useMemo(() => {
-    return suppliers.filter((s) => Boolean(s.gstin)).length;
-  }, [suppliers]);
-
   // Transactions for selected supplier in details modal
   const selectedSupplierTxList = useMemo(() => {
     if (!selectedSupplierDetails) return [];
@@ -392,62 +388,25 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
         </button>
       </div>
 
-      {/* 2. Top Summary Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Metric 1: Total Suppliers */}
-        <div className="bg-white rounded-xl p-4 border border-slate-200/90 shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500">Total Suppliers</span>
-            <div className="w-8 h-8 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center">
-              <Truck className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-slate-900 font-mono">{suppliers.length}</span>
-          </div>
-        </div>
-
-        {/* Metric 2: Total Balance to Pay (Payables) */}
-        <div className="bg-white rounded-xl p-4 border border-rose-200/90 shadow-2xs bg-gradient-to-br from-white to-rose-50/30">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-rose-700">Total Balance to Pay</span>
-            <div className="w-8 h-8 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center">
-              <IndianRupee className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-rose-700 font-mono">
+      {/* 2. Top Summary: Total Balance to Pay */}
+      <div className="bg-white rounded-xl p-4 sm:p-5 border border-rose-200/90 shadow-2xs bg-gradient-to-br from-white via-white to-rose-50/30 flex items-center justify-between">
+        <div>
+          <span className="text-xs font-semibold text-rose-700 uppercase tracking-wider">
+            Total Balance to Pay
+          </span>
+          <div className="mt-1 flex items-baseline gap-2.5">
+            <span className="text-3xl font-bold text-rose-700 font-mono">
               {formatINR(totalBalanceToPay)}
             </span>
+            {suppliersWithDue > 0 && (
+              <span className="text-xs text-rose-600/80 font-medium">
+                across {suppliersWithDue} {suppliersWithDue === 1 ? 'supplier' : 'suppliers'} with pending balance
+              </span>
+            )}
           </div>
         </div>
-
-        {/* Metric 3: Settled Suppliers */}
-        <div className="bg-white rounded-xl p-4 border border-slate-200/90 shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500">Cleared / Settled</span>
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-              <CheckCircle2 className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-emerald-700 font-mono">
-              {suppliers.length - suppliersWithDue}
-            </span>
-          </div>
-        </div>
-
-        {/* Metric 4: GST Status */}
-        <div className="bg-white rounded-xl p-4 border border-slate-200/90 shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500">GST Registered</span>
-            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-              <ShieldCheck className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2">
-            <span className="text-2xl font-bold text-blue-700 font-mono">{gstRegisteredCount}</span>
-          </div>
+        <div className="w-11 h-11 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+          <IndianRupee className="w-5 h-5" />
         </div>
       </div>
 
@@ -506,7 +465,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                 : 'text-slate-600 hover:text-emerald-600'
             }`}
           >
-            Settled ({suppliers.length - suppliersWithDue})
+            Settled
           </button>
           <button
             type="button"
