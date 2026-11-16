@@ -43,6 +43,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [formData, setFormData] = useState<ShopSettings>({ ...settings });
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [logoError, setLogoError] = useState<string | null>(null);
+
+
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -227,6 +229,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
+
+
           {/* PRINTER SETTINGS */}
           <div className="bg-white rounded-xl p-5 shadow-xs border border-slate-200/80 space-y-4">
           <div className="flex items-center gap-2 pb-3 border-b border-zinc-100">

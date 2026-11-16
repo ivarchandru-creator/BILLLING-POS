@@ -48,11 +48,12 @@ export function getSupabaseConfig(): SupabaseConfig {
     // fallback
   }
 
+  // 3. Default user-provided Supabase project credentials
   return {
-    url: '',
-    anonKey: '',
+    url: 'https://xlvairghpkaqrpuwdaqx.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhsdmFpcmdocGthcXJwdXdkYXF4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA1MTMyODcsImV4cCI6MjEwNjA4OTI4N30.X2mnnSzXzPQZuJtVltU2PIm61MKLA216rF_bupC46X4',
     autoSync: true,
-    isConfigured: false,
+    isConfigured: true,
   };
 }
 
