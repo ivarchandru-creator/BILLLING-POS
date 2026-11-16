@@ -72,7 +72,7 @@ export default function App() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [settings, setSettings] = useState<ShopSettings>(loadShopSettings());
   const [stockTransactions, setStockTransactions] = useState<StockTransaction[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
+  const [categories, setCategories] = useState<string[]>(() => loadCategories());
   const [draftCartCount, setDraftCartCount] = useState<number>(() => loadDraftBilling()?.cartItems?.length || 0);
 
   // Print Modal State
@@ -362,11 +362,12 @@ export default function App() {
   };
 
   const handleDeleteCategory = (catToDelete: string, targetCategory?: string) => {
+    const currentCats = categories.length > 0 ? categories : loadCategories();
     const fallback =
       targetCategory ||
-      categories.find((c) => c.toLowerCase() !== catToDelete.toLowerCase()) ||
+      currentCats.find((c) => c.toLowerCase() !== catToDelete.toLowerCase()) ||
       'Accessories & Tools';
-    const updatedCategories = categories.filter(
+    const updatedCategories = currentCats.filter(
       (c) => c.toLowerCase() !== catToDelete.toLowerCase()
     );
     setCategories(updatedCategories);

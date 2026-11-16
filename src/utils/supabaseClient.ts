@@ -683,7 +683,7 @@ export async function syncSingleProductToSupabase(p: Product): Promise<void> {
   if (!client) return;
 
   try {
-    await client.from('products').upsert({
+    const { error } = await client.from('products').upsert({
       product_id: p.productId,
       name: p.name,
       category: p.category,
@@ -700,8 +700,11 @@ export async function syncSingleProductToSupabase(p: Product): Promise<void> {
       active_status: p.activeStatus !== false,
       updated_at: new Date().toISOString(),
     });
+    if (error) {
+      console.error('Real-time Supabase product sync database error:', error.message, error.details, error.hint);
+    }
   } catch (err) {
-    console.warn('Real-time Supabase product sync error:', err);
+    console.warn('Real-time Supabase product sync exception:', err);
   }
 }
 
