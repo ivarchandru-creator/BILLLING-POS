@@ -39,6 +39,7 @@ import {
   syncSingleCustomerToSupabase,
   syncSingleSupplierToSupabase,
   pullDataFromSupabase,
+  pushAllLocalDataToSupabase,
 } from './utils/supabaseClient';
 import { getCurrentDateTimeFormatted, generateInvoiceNumber } from './utils/formatters';
 import { getActiveAuthSession, clearAuthSession } from './utils/auth';
@@ -79,19 +80,46 @@ export default function App() {
   const [printModalInvoice, setPrintModalInvoice] = useState<Invoice | null>(null);
   const [printModalConfirmCallback, setPrintModalConfirmCallback] = useState<(() => void) | null>(null);
 
-  // Initialize data on mount: load from local cache first, then sync latest from Supabase cloud
+  // Initialize data on mount: push frontend data to Supabase cloud, then pull latest
   useEffect(() => {
-    setProducts(loadProducts());
-    setInvoices(loadInvoices());
-    setSuppliers(loadSuppliers());
-    setSupplierTransactions(loadSupplierTransactions());
-    setCustomers(loadCustomers());
-    setSettings(loadShopSettings());
-    setStockTransactions(loadStockTransactions());
-    setCategories(loadCategories());
+    const initData = async () => {
+      const prod = loadProducts();
+      const inv = loadInvoices();
+      const sup = loadSuppliers();
+      const supTx = loadSupplierTransactions();
+      const cust = loadCustomers();
+      const setts = loadShopSettings();
+      const stockTx = loadStockTransactions();
+      const cats = loadCategories();
 
-    // Auto-fetch fresh production records from Supabase in the background
-    handlePullFromSupabase();
+      setProducts(prod);
+      setInvoices(inv);
+      setSuppliers(sup);
+      setSupplierTransactions(supTx);
+      setCustomers(cust);
+      setSettings(setts);
+      setStockTransactions(stockTx);
+      setCategories(cats);
+
+      // Push current frontend data to Supabase database
+      try {
+        await pushAllLocalDataToSupabase({
+          products: prod,
+          invoices: inv,
+          customers: cust,
+          suppliers: sup,
+          stockTransactions: stockTx,
+          settings: setts,
+        });
+      } catch (err) {
+        console.warn('Initial push to Supabase failed:', err);
+      }
+
+      // Sync latest data from Supabase Cloud
+      await handlePullFromSupabase();
+    };
+
+    initData();
   }, []);
 
   // Global Keyboard Shortcuts
