@@ -40,6 +40,9 @@ import {
   syncSingleSupplierToSupabase,
   pullDataFromSupabase,
   pushAllLocalDataToSupabase,
+  deleteSingleCustomerFromSupabase,
+  deleteSingleSupplierFromSupabase,
+  syncShopSettingsToSupabase,
 } from './utils/supabaseClient';
 import { getCurrentDateTimeFormatted, generateInvoiceNumber } from './utils/formatters';
 import { getActiveAuthSession, clearAuthSession } from './utils/auth';
@@ -627,6 +630,7 @@ export default function App() {
     const updated = suppliers.filter((s) => s.supplierId !== supplierId);
     setSuppliers(updated);
     saveSuppliers(updated);
+    deleteSingleSupplierFromSupabase(supplierId);
   };
 
   // Record a transaction for a supplier (payment, purchase bill, adjustment)
@@ -658,12 +662,14 @@ export default function App() {
     const updated = customers.filter((c) => c.customerId !== customerId);
     setCustomers(updated);
     saveCustomers(updated);
+    deleteSingleCustomerFromSupabase(customerId);
   };
 
   // Save settings
   const handleSaveSettings = (newSettings: ShopSettings) => {
     setSettings(newSettings);
     saveShopSettings(newSettings);
+    syncShopSettingsToSupabase(newSettings);
   };
 
   // Mark credit invoice as paid (clears reminder from dashboard)

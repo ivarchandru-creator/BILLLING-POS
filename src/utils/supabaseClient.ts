@@ -786,3 +786,47 @@ export async function syncSingleSupplierToSupabase(s: Supplier): Promise<void> {
     console.warn('Real-time Supabase supplier sync error:', err);
   }
 }
+
+export async function deleteSingleCustomerFromSupabase(customerId: string): Promise<void> {
+  const config = getSupabaseConfig();
+  if (!config.isConfigured) return;
+  const client = getSupabaseClient();
+  if (!client) return;
+
+  try {
+    await client.from('customers').delete().eq('customer_id', customerId);
+  } catch (err) {
+    console.warn('Real-time Supabase customer delete error:', err);
+  }
+}
+
+export async function deleteSingleSupplierFromSupabase(supplierId: string): Promise<void> {
+  const config = getSupabaseConfig();
+  if (!config.isConfigured) return;
+  const client = getSupabaseClient();
+  if (!client) return;
+
+  try {
+    await client.from('suppliers').delete().eq('supplier_id', supplierId);
+  } catch (err) {
+    console.warn('Real-time Supabase supplier delete error:', err);
+  }
+}
+
+export async function syncShopSettingsToSupabase(settings: ShopSettings): Promise<void> {
+  const config = getSupabaseConfig();
+  if (!config.isConfigured || !config.autoSync) return;
+  const client = getSupabaseClient();
+  if (!client) return;
+
+  try {
+    await client.from('shop_settings').upsert({
+      id: 'current',
+      settings,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('Real-time Supabase shop settings sync error:', err);
+  }
+}
+
